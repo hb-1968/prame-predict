@@ -1,0 +1,22 @@
+# Large data files
+data/wsi/
+data/tiles/
+embeddings/
+
+# Keep expression data tracked (small CSV files)
+# Keep results tracked (figures, metrics)
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Model weights
+*.pth
+*.pt
+*.bin
+
+# OS
+.DS_Store
+Thumbs.db
+.claude
