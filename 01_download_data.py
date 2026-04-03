@@ -239,18 +239,43 @@ def main():
                .reset_index(drop=True))
     print(f"Unique cases: {len(expr_df)}")
 
-    # Step 3: Median split
-    median_tpm = expr_df["prame_tpm"].median()
-    expr_df["prame_label"] = (expr_df["prame_tpm"] >= median_tpm).astype(int)
-    expr_df["prame_group"] = expr_df["prame_label"].map({0: "low", 1: "high"})
+    # Step 3: Quartile split (exclude ambiguous middle)
+    #
+    # PRAME IHC is only diagnostically reliable at the extremes:
+    # diffuse 4+ staining (>75% cells) favors melanoma, while
+    # complete negativity favors nevus. Intermediate staining
+    # (1+ through 3+) is noncontributory (O'Connor et al. 2022,
+    # Sullivan et al. 2026). We mirror this clinical reality by
+    # selecting only the top and bottom quartiles of PRAME mRNA
+    # expression, discarding ambiguous intermediate cases.
+    q25 = expr_df["prame_tpm"].quantile(0.25)
+    q75 = expr_df["prame_tpm"].quantile(0.75)
 
-    print(f"\nPRAME TPM statistics:")
-    print(f"  Median: {median_tpm:.2f}")
-    print(f"  Mean:   {expr_df['prame_tpm'].mean():.2f}")
-    print(f"  Min:    {expr_df['prame_tpm'].min():.2f}")
-    print(f"  Max:    {expr_df['prame_tpm'].max():.2f}")
-    print(f"  High:   {expr_df['prame_label'].sum()}")
-    print(f"  Low:    {(1 - expr_df['prame_label']).sum()}")
+    high = expr_df[expr_df["prame_tpm"] >= q75].copy()
+    low = expr_df[expr_df["prame_tpm"] <= q25].copy()
+    excluded = expr_df[
+        (expr_df["prame_tpm"] > q25) & (expr_df["prame_tpm"] < q75)
+    ]
+
+    high["prame_label"] = 1
+    high["prame_group"] = "high"
+    low["prame_label"] = 0
+    low["prame_group"] = "low"
+
+    expr_df_full = expr_df.copy()  # keep full data for reference
+    expr_df = pd.concat([high, low]).reset_index(drop=True)
+
+    print(f"\nPRAME TPM statistics (full cohort):")
+    print(f"  Q25:    {q25:.2f}")
+    print(f"  Median: {expr_df_full['prame_tpm'].median():.2f}")
+    print(f"  Q75:    {q75:.2f}")
+    print(f"  Mean:   {expr_df_full['prame_tpm'].mean():.2f}")
+    print(f"  Min:    {expr_df_full['prame_tpm'].min():.2f}")
+    print(f"  Max:    {expr_df_full['prame_tpm'].max():.2f}")
+    print(f"\nQuartile split:")
+    print(f"  High (>= Q75): {len(high)} cases")
+    print(f"  Low  (<= Q25): {len(low)} cases")
+    print(f"  Excluded middle: {len(excluded)} cases")
 
     # Save expression data
     expr_path = out_dir / "prame_expression.csv"
