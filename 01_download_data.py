@@ -214,6 +214,7 @@ def query_available_slides(case_ids):
         },
     )
     response.raise_for_status()
+    data = response.json()
 
     slides = []
     for hit in data["data"]["hits"]:
@@ -234,25 +235,8 @@ def main():
     out_dir = Path("data/expression")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Step 1: Check for cached expression data
-    expr_path = out_dir / "prame_expression.csv"
-    if expr_path.exists():
-        print(f"Found cached expression data at {expr_path}, skipping download")
-        expr_df = pd.read_csv(expr_path)
-        print(f"Loaded {len(expr_df)} cases")
-    else:
-        # Download from GDC
-        hits = query_expression_data()
-
-        print("\nDownloading expression data and extracting PRAME values...")
-        expr_df = extract_prame_expression(hits)
-        print(f"\nPRAME expression obtained for {len(expr_df)} samples")
-
-        # Remove duplicates
-        expr_df = (expr_df
-                   .sort_values("prame_tpm", ascending=False)
-                   .drop_duplicates(subset="submitter_id", keep="first")
-                   .reset_index(drop=True))
+    # Step 1: Get expression files
+    hits = query_expression_data()
 
     # Step 2: Extract PRAME expression
     print("\nDownloading expression data and extracting PRAME values...")
