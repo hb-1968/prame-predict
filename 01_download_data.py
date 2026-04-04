@@ -14,6 +14,7 @@ Usage:
 """
 
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 import pandas as pd
 from pathlib import Path
@@ -76,84 +77,83 @@ def query_expression_data():
     return hits
 
 
-def download_expression_file(file_id):
+def _download_one(session, hit):
     """
-    Download a single gene expression quantification file from GDC.
+    Download a single expression file and return the PRAME record, or None.
 
-    GDC serves these as tab-separated files inside a gzipped tarball,
-    but the /data endpoint with a single file_id returns just the TSV.
+    Uses a shared requests.Session for TCP connection reuse.
     """
-    url = f"{GDC_API}/data/{file_id}"
-    response = requests.get(url)
-    response.raise_for_status()
-
-    # The response is a TSV file
     from io import StringIO
-    lines = response.text
-    df = pd.read_csv(StringIO(lines), sep="\t", comment="#")
-    return df
+
+    file_id = hit["file_id"]
+    case_id = hit["cases"][0]["case_id"]
+    submitter_id = hit["cases"][0]["submitter_id"]
+
+    try:
+        response = session.get(f"{GDC_API}/data/{file_id}")
+        response.raise_for_status()
+
+        expr_df = pd.read_csv(StringIO(response.text), sep="\t", comment="#")
+
+        # Find PRAME row — column name varies by GDC version
+        if "gene_id" in expr_df.columns:
+            prame_rows = expr_df[
+                expr_df["gene_id"].str.startswith(PRAME_GENE_ID)
+            ]
+        elif "gene_name" in expr_df.columns:
+            prame_rows = expr_df[expr_df["gene_name"] == "PRAME"]
+        else:
+            return None
+
+        if prame_rows.empty:
+            return None
+
+        prame_row = prame_rows.iloc[0]
+
+        # Extract TPM (transcripts per million) — the normalized measure
+        tpm_col = None
+        for col in ["tpm_unstranded", "TPM", "FPKM"]:
+            if col in prame_row.index:
+                tpm_col = col
+                break
+
+        if tpm_col is None:
+            return None
+
+        return {
+            "case_id": case_id,
+            "submitter_id": submitter_id,
+            "file_id": file_id,
+            "prame_tpm": float(prame_row[tpm_col]),
+        }
+
+    except Exception as e:
+        print(f"  Error on {file_id}: {e}")
+        return None
 
 
-def extract_prame_expression(hits):
+def extract_prame_expression(hits, max_workers=16):
     """
-    For each expression file, download it and extract the PRAME row.
+    Download expression files in parallel and extract PRAME values.
 
-    This takes a few minutes since we're downloading one file at a time.
-    Each file is small (~2 MB) but there are hundreds of them.
+    Uses a thread pool (I/O-bound) and a shared session for connection reuse.
     """
     records = []
+    session = requests.Session()
 
-    for i, hit in enumerate(hits):
-        file_id = hit["file_id"]
-        case_id = hit["cases"][0]["case_id"]
-        submitter_id = hit["cases"][0]["submitter_id"]
-
-        if (i + 1) % 20 == 0:
-            print(f"  Processing {i + 1}/{len(hits)}...")
-
-        try:
-            expr_df = download_expression_file(file_id)
-
-            # Find PRAME row — column name varies by GDC version
-            # Look for Ensembl gene ID in gene_id or gene_name column
-            if "gene_id" in expr_df.columns:
-                prame_rows = expr_df[
-                    expr_df["gene_id"].str.startswith(PRAME_GENE_ID)
-                ]
-            elif "gene_name" in expr_df.columns:
-                prame_rows = expr_df[expr_df["gene_name"] == "PRAME"]
-            else:
-                print(f"  Skipping {file_id}: unrecognized column format")
-                continue
-
-            if prame_rows.empty:
-                print(f"  Skipping {file_id}: PRAME not found")
-                continue
-
-            prame_row = prame_rows.iloc[0]
-
-            # Extract TPM (transcripts per million) — the normalized measure
-            # Some files use "tpm_unstranded", others "TPM"
-            tpm_col = None
-            for col in ["tpm_unstranded", "TPM", "FPKM"]:
-                if col in prame_row.index:
-                    tpm_col = col
-                    break
-
-            if tpm_col is None:
-                print(f"  Skipping {file_id}: no TPM/FPKM column found")
-                continue
-
-            records.append({
-                "case_id": case_id,
-                "submitter_id": submitter_id,
-                "file_id": file_id,
-                "prame_tpm": float(prame_row[tpm_col]),
-            })
-
-        except Exception as e:
-            print(f"  Error on {file_id}: {e}")
-            continue
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {
+            pool.submit(_download_one, session, hit): i
+            for i, hit in enumerate(hits)
+        }
+        done = 0
+        for future in as_completed(futures):
+            done += 1
+            if done % 50 == 0:
+                print(f"  Processed {done}/{len(hits)}...")
+            result = future.result()
+            if result is not None:
+                records.append(result)
 
     return pd.DataFrame(records)
 
@@ -364,16 +364,32 @@ def main():
         extremes = merged[merged["prame_label"] != -1].copy()
         middle = merged[merged["prame_label"] == -1].copy()
 
-        # Take all extremes first (they are the evaluation backbone)
         extreme_size = extremes["file_size_gb"].sum()
-        remaining_budget = disk_budget_gb - extreme_size
 
-        # Fill remaining space with smallest middle slides
-        middle_sorted = middle.nsmallest(len(middle), "file_size_gb")
-        middle_cumsize = middle_sorted["file_size_gb"].cumsum()
-        middle_selected = middle_sorted[middle_cumsize <= remaining_budget]
+        if extreme_size <= disk_budget_gb:
+            # All extremes fit — fill remaining space with smallest middle slides
+            remaining_budget = disk_budget_gb - extreme_size
+            middle_sorted = middle.nsmallest(len(middle), "file_size_gb")
+            middle_cumsize = middle_sorted["file_size_gb"].cumsum()
+            middle_selected = middle_sorted[middle_cumsize <= remaining_budget]
+            selected = pd.concat([extremes, middle_selected]).reset_index(drop=True)
+        else:
+            # Extremes alone exceed budget — take balanced sample from
+            # high and low groups, smallest slides first, up to budget
+            high = extremes[extremes["prame_label"] == 1].nsmallest(len(extremes), "file_size_gb")
+            low = extremes[extremes["prame_label"] == 0].nsmallest(len(extremes), "file_size_gb")
 
-        selected = pd.concat([extremes, middle_selected]).reset_index(drop=True)
+            selected_parts = []
+            budget_left = disk_budget_gb
+            # Interleave high/low to keep classes balanced
+            for h_row, l_row in zip(high.itertuples(), low.itertuples()):
+                if h_row.file_size_gb + l_row.file_size_gb > budget_left:
+                    break
+                selected_parts.append(high.loc[[h_row.Index]])
+                selected_parts.append(low.loc[[l_row.Index]])
+                budget_left -= h_row.file_size_gb + l_row.file_size_gb
+
+            selected = pd.concat(selected_parts).reset_index(drop=True) if selected_parts else pd.DataFrame()
 
     high_count = len(selected[selected["prame_label"] == 1])
     low_count = len(selected[selected["prame_label"] == 0])
