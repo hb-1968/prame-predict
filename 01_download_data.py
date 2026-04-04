@@ -235,21 +235,27 @@ def main():
     out_dir = Path("data/expression")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Step 1: Get expression files
-    hits = query_expression_data()
+    # Step 1: Check for cached expression data
+    expr_path = out_dir / "prame_expression.csv"
+    if expr_path.exists():
+        print(f"Found cached expression data at {expr_path}, skipping download")
+        expr_df = pd.read_csv(expr_path)
+        print(f"Loaded {len(expr_df)} cases")
+    else:
+        # Step 2: Download and extract PRAME expression
+        hits = query_expression_data()
 
-    # Step 2: Extract PRAME expression
-    print("\nDownloading expression data and extracting PRAME values...")
-    expr_df = extract_prame_expression(hits)
-    print(f"\nPRAME expression obtained for {len(expr_df)} samples")
+        print("\nDownloading expression data and extracting PRAME values...")
+        expr_df = extract_prame_expression(hits)
+        print(f"\nPRAME expression obtained for {len(expr_df)} samples")
 
-    # Remove duplicates (some cases have multiple aliquots)
-    # Keep the one with highest TPM as the representative
-    expr_df = (expr_df
-               .sort_values("prame_tpm", ascending=False)
-               .drop_duplicates(subset="submitter_id", keep="first")
-               .reset_index(drop=True))
-    print(f"Unique cases: {len(expr_df)}")
+        # Remove duplicates (some cases have multiple aliquots)
+        # Keep the one with highest TPM as the representative
+        expr_df = (expr_df
+                   .sort_values("prame_tpm", ascending=False)
+                   .drop_duplicates(subset="submitter_id", keep="first")
+                   .reset_index(drop=True))
+        print(f"Unique cases: {len(expr_df)}")
 
     # Step 3: Quartile split (exclude ambiguous middle)
     #
@@ -358,7 +364,7 @@ def main():
     print(f"Total download size for all matched slides: {total_size_gb:.1f} GB")
 
     # Balance the groups and limit by disk space
-    target_per_group = 40
+    target_per_group = 58
     high_slides = merged[merged["prame_label"] == 1].nsmallest(
         target_per_group, "file_size_gb"
     )
