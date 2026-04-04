@@ -257,43 +257,35 @@ def main():
                    .reset_index(drop=True))
         print(f"Unique cases: {len(expr_df)}")
 
-    # Step 3: Quartile split (exclude ambiguous middle)
-    #
-    # PRAME IHC is only diagnostically reliable at the extremes:
-    # diffuse 4+ staining (>75% cells) favors melanoma, while
-    # complete negativity favors nevus. Intermediate staining
-    # (1+ through 3+) is noncontributory (O'Connor et al. 2022,
-    # Sullivan et al. 2026). We mirror this clinical reality by
-    # selecting only the top and bottom quartiles of PRAME mRNA
-    # expression, discarding ambiguous intermediate cases.
+    # Step 3: Tag expression quartiles
     q25 = expr_df["prame_tpm"].quantile(0.25)
     q75 = expr_df["prame_tpm"].quantile(0.75)
 
-    high = expr_df[expr_df["prame_tpm"] >= q75].copy()
-    low = expr_df[expr_df["prame_tpm"] <= q25].copy()
-    excluded = expr_df[
-        (expr_df["prame_tpm"] > q25) & (expr_df["prame_tpm"] < q75)
-    ]
+    expr_df["prame_group"] = "middle"
+    expr_df.loc[expr_df["prame_tpm"] >= q75, "prame_group"] = "high"
+    expr_df.loc[expr_df["prame_tpm"] <= q25, "prame_group"] = "low"
 
-    high["prame_label"] = 1
-    high["prame_group"] = "high"
-    low["prame_label"] = 0
-    low["prame_group"] = "low"
+    # Binary label for quartile extremes (used for ground-truth evaluation)
+    # Middle cases get label -1 to distinguish them
+    expr_df["prame_label"] = -1
+    expr_df.loc[expr_df["prame_group"] == "high", "prame_label"] = 1
+    expr_df.loc[expr_df["prame_group"] == "low", "prame_label"] = 0
 
-    expr_df_full = expr_df.copy()  # keep full data for reference
-    expr_df = pd.concat([high, low]).reset_index(drop=True)
+    high = expr_df[expr_df["prame_group"] == "high"]
+    low = expr_df[expr_df["prame_group"] == "low"]
+    middle = expr_df[expr_df["prame_group"] == "middle"]
 
     print(f"\nPRAME TPM statistics (full cohort):")
     print(f"  Q25:    {q25:.2f}")
-    print(f"  Median: {expr_df_full['prame_tpm'].median():.2f}")
+    print(f"  Median: {expr_df['prame_tpm'].median():.2f}")
     print(f"  Q75:    {q75:.2f}")
-    print(f"  Mean:   {expr_df_full['prame_tpm'].mean():.2f}")
-    print(f"  Min:    {expr_df_full['prame_tpm'].min():.2f}")
-    print(f"  Max:    {expr_df_full['prame_tpm'].max():.2f}")
-    print(f"\nQuartile split:")
+    print(f"  Mean:   {expr_df['prame_tpm'].mean():.2f}")
+    print(f"  Min:    {expr_df['prame_tpm'].min():.2f}")
+    print(f"  Max:    {expr_df['prame_tpm'].max():.2f}")
+    print(f"\nQuartile groups:")
     print(f"  High (>= Q75): {len(high)} cases")
     print(f"  Low  (<= Q25): {len(low)} cases")
-    print(f"  Excluded middle: {len(excluded)} cases")
+    print(f"  Middle:         {len(middle)} cases")
 
     # Save expression data
     expr_path = out_dir / "prame_expression.csv"
@@ -358,24 +350,41 @@ def main():
     )
     print(f"Slides with matched expression data: {len(merged)}")
 
-    # Step 5: Select a manageable subset
-    # Aim for ~80 slides, balanced between high and low PRAME
+    # Step 5: Select slides
     total_size_gb = merged["file_size_gb"].sum()
     print(f"Total download size for all matched slides: {total_size_gb:.1f} GB")
 
-    # Balance the groups and limit by disk space
-    target_per_group = 58
-    high_slides = merged[merged["prame_label"] == 1].nsmallest(
-        target_per_group, "file_size_gb"
-    )
-    low_slides = merged[merged["prame_label"] == 0].nsmallest(
-        target_per_group, "file_size_gb"
-    )
-    selected = pd.concat([high_slides, low_slides]).reset_index(drop=True)
+    disk_budget_gb = 200  # leave headroom for tiles and embeddings
 
+    if total_size_gb <= disk_budget_gb:
+        selected = merged.reset_index(drop=True)
+    else:
+        # Prioritize quartile extremes (ground-truth evaluation set),
+        # then fill remaining budget with middle cases
+        extremes = merged[merged["prame_label"] != -1].copy()
+        middle = merged[merged["prame_label"] == -1].copy()
+
+        # Take all extremes first (they are the evaluation backbone)
+        extreme_size = extremes["file_size_gb"].sum()
+        remaining_budget = disk_budget_gb - extreme_size
+
+        # Fill remaining space with smallest middle slides
+        middle_sorted = middle.nsmallest(len(middle), "file_size_gb")
+        middle_cumsize = middle_sorted["file_size_gb"].cumsum()
+        middle_selected = middle_sorted[middle_cumsize <= remaining_budget]
+
+        selected = pd.concat([extremes, middle_selected]).reset_index(drop=True)
+
+    high_count = len(selected[selected["prame_label"] == 1])
+    low_count = len(selected[selected["prame_label"] == 0])
+    middle_count = len(selected[selected["prame_label"] == -1])
     subset_size_gb = selected["file_size_gb"].sum()
-    print(f"\nSelected subset:")
-    print(f"  Slides: {len(selected)} ({len(high_slides)} high, {len(low_slides)} low)")
+
+    print(f"\nSelected slides:")
+    print(f"  Total: {len(selected)}")
+    print(f"  High PRAME (quartile): {high_count}")
+    print(f"  Low PRAME (quartile): {low_count}")
+    print(f"  Middle (full-range training): {middle_count}")
     print(f"  Download size: {subset_size_gb:.1f} GB")
 
     # Save manifest
