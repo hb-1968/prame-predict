@@ -12,11 +12,15 @@ Usage:
 
 import argparse
 import shutil
+import os
+os.environ["TORCHDYNAMO_DISABLE"] = "1"
 import torch
+torch.set_float32_matmul_precision('medium')
 import timm
 import numpy as np
 import h5py
-import os
+import threading
+import queue
 from pathlib import Path
 from tqdm import tqdm
 
@@ -109,13 +113,42 @@ def _preprocess_batch(batch_np, device, use_amp):
     Replaces per-patch PIL.fromarray + timm transform pipeline.
     Both UNI and CONCH use mean=0.5, std=0.5, input_size=224×224.
     """
-    # (N, H, W, C) uint8 → (N, C, H, W) float32, scaled to [0, 1]
-    batch = torch.from_numpy(batch_np).permute(0, 3, 1, 2).float().div_(255.0)
-    # Normalize: (x - 0.5) / 0.5 = x * 2 - 1, maps [0,1] → [-1,1]
-    batch.mul_(2.0).sub_(1.0)
-    if use_amp:
-        return batch.to(device, non_blocking=True).half()
+    # (N, H, W, C) uint8 → (N, C, H, W) float, fused scale+normalize
+    # x/255*2-1 = x/127.5-1 — single multiply+add instead of three ops
+    batch = torch.from_numpy(batch_np).permute(0, 3, 1, 2)
+    dtype = torch.float16 if use_amp else torch.float32
+    batch = batch.to(dtype=dtype).div_(127.5).sub_(1.0)
     return batch.to(device, non_blocking=True)
+
+
+class _BatchPrefetcher:
+    """
+    Prefetch and preprocess the next batch in a background thread
+    while the model processes the current batch.
+    """
+    def __init__(self, patches, batch_size, device, use_amp):
+        self._patches = patches
+        self._batch_size = batch_size
+        self._device = device
+        self._use_amp = use_amp
+        self._queue = queue.Queue(maxsize=2)
+        self._n = len(patches)
+        self._thread = threading.Thread(target=self._produce, daemon=True)
+        self._thread.start()
+
+    def _produce(self):
+        for i in range(0, self._n, self._batch_size):
+            batch_np = np.array(self._patches[i:i + self._batch_size])
+            tensor = _preprocess_batch(batch_np, self._device, self._use_amp)
+            self._queue.put(tensor)
+        self._queue.put(None)  # sentinel
+
+    def __iter__(self):
+        while True:
+            batch = self._queue.get()
+            if batch is None:
+                break
+            yield batch
 
 
 def extract_slide_features(slide_dir, model, device, batch_size=64):
@@ -151,33 +184,43 @@ def extract_slide_features(slide_dir, model, device, batch_size=64):
         return None, None
 
     use_amp = device.type == "cuda"
-    features = []
+    n = len(patches)
+    num_batches = (n + batch_size - 1) // batch_size
 
-    with torch.no_grad():
-        for i in tqdm(range(0, len(patches), batch_size),
-                      desc=f"  Extracting", leave=False):
-            batch_np = np.array(patches[i:i + batch_size])  # copy chunk from mmap
-            batch = _preprocess_batch(batch_np, device, use_amp)
+    # Pre-allocate output — avoids list accumulation + vstack copy
+    # Feature dim: UNI=1024, CONCH=768. Detect from first batch.
+    features = None
+    write_idx = 0
 
+    prefetcher = _BatchPrefetcher(patches, batch_size, device, use_amp)
+
+    with torch.inference_mode():
+        for batch in tqdm(prefetcher, total=num_batches,
+                          desc=f"  Extracting", leave=False):
             if use_amp:
                 with torch.amp.autocast("cuda"):
                     feats = model(batch.float())
             else:
                 feats = model(batch)
 
-            features.append(feats.cpu().numpy().astype(np.float16))
+            feats_np = feats.cpu().numpy().astype(np.float16)
+
+            if features is None:
+                features = np.empty((n, feats_np.shape[1]), dtype=np.float16)
+
+            features[write_idx:write_idx + len(feats_np)] = feats_np
+            write_idx += len(feats_np)
 
     del patches
 
-    features = np.vstack(features)
     return features, coords
 
 
 def save_features(out_path, features, coords, model_name, slide_name):
     """Save extracted features as compressed HDF5."""
     with h5py.File(out_path, "w") as f:
-        f.create_dataset("features", data=features, compression="gzip", compression_opts=9)
-        f.create_dataset("coords", data=coords, compression="gzip", compression_opts=9)
+        f.create_dataset("features", data=features, compression="gzip", compression_opts=4)
+        f.create_dataset("coords", data=coords, compression="gzip", compression_opts=4)
         f.attrs["model"] = model_name
         f.attrs["slide_name"] = slide_name
         f.attrs["num_patches"] = features.shape[0]
