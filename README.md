@@ -88,17 +88,12 @@ python 06_compare_models.py                  # Side-by-side evaluation
 ## Compute Setup
 
 Development on a Windows laptop (CPU only). Heavy compute (tiling,
-feature extraction) on Google Colab with a T4 GPU. Per-slide processing
-loop:
-
-1. Upload one .svs from laptop to Google Drive
-2. Colab tiles, extracts features, saves embeddings to Drive
-3. Delete WSI and tiles from Drive to free space
-4. Repeat
-
-WSI download recommended on a fast connection (campus network).
-At home speeds (~1 MB/s), the full dataset takes impractically long.
-University networks typically achieve 100+ MB/s to GDC servers.
+feature extraction) on Google Colab with a G4 GPU. The Colab notebook
+downloads WSIs directly from the GDC API, tiles them, extracts features
+with UNI/CONCH, saves the resulting embeddings to Google Drive, then
+deletes the WSI and tile files to free space — all within a single
+automated loop. No manual file uploads are required; the notebook
+handles the full download-through-extraction pipeline on its own.
 
 ## Environment
 ```bash
