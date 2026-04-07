@@ -18,8 +18,6 @@ import numpy as np
 import h5py
 import os
 from pathlib import Path
-from PIL import Image
-from timm.data import resolve_data_config, create_transform
 from tqdm import tqdm
 
 
@@ -83,7 +81,7 @@ def load_conch():
 
 
 def load_model(model_name):
-    """Load the requested model and its preprocessing transform."""
+    """Load the requested model and return it with device info."""
     print(f"Loading model: {model_name}")
 
     if model_name == "uni":
@@ -95,10 +93,6 @@ def load_model(model_name):
 
     model.eval()
 
-    # Get preprocessing config from the base architecture
-    config = resolve_data_config(model.pretrained_cfg)
-    transform = create_transform(**config)
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
     print(f"Running on: {device}")
@@ -106,18 +100,35 @@ def load_model(model_name):
     param_count = sum(p.numel() for p in model.parameters())
     print(f"Parameters: {param_count:,}")
 
-    return model, transform, device
+    return model, device
 
 
-def extract_slide_features(slide_dir, model, transform, device,
-                           batch_size=64):
+def _preprocess_batch(batch_np, device, use_amp):
+    """
+    Vectorized preprocessing: uint8 numpy (N,224,224,3) → normalized tensor.
+    Replaces per-patch PIL.fromarray + timm transform pipeline.
+    Both UNI and CONCH use mean=0.5, std=0.5, input_size=224×224.
+    """
+    # (N, H, W, C) uint8 → (N, C, H, W) float32, scaled to [0, 1]
+    batch = torch.from_numpy(batch_np).permute(0, 3, 1, 2).float().div_(255.0)
+    # Normalize: (x - 0.5) / 0.5 = x * 2 - 1, maps [0,1] → [-1,1]
+    batch.mul_(2.0).sub_(1.0)
+    if use_amp:
+        return batch.to(device, non_blocking=True).half()
+    return batch.to(device, non_blocking=True)
+
+
+def extract_slide_features(slide_dir, model, device, batch_size=64):
     """
     Extract features for all patches in a single slide directory.
+
+    Uses vectorized numpy→torch preprocessing instead of per-patch PIL
+    transforms. On GPU, uses float16 inference via torch.amp for ~2x
+    throughput.
 
     Args:
         slide_dir: Path containing patches.npy and coords.npy
         model: frozen encoder
-        transform: preprocessing pipeline
         device: cuda or cpu
         batch_size: images per forward pass (64 for GPU, 16 for CPU)
 
@@ -139,20 +150,21 @@ def extract_slide_features(slide_dir, model, transform, device,
         print(f"  Empty patches array in {slide_dir}")
         return None, None
 
+    use_amp = device.type == "cuda"
     features = []
 
     with torch.no_grad():
         for i in tqdm(range(0, len(patches), batch_size),
                       desc=f"  Extracting", leave=False):
             batch_np = np.array(patches[i:i + batch_size])  # copy chunk from mmap
-            tensors = []
+            batch = _preprocess_batch(batch_np, device, use_amp)
 
-            for arr in batch_np:
-                img = Image.fromarray(arr)
-                tensors.append(transform(img))
+            if use_amp:
+                with torch.amp.autocast("cuda"):
+                    feats = model(batch.float())
+            else:
+                feats = model(batch)
 
-            batch = torch.stack(tensors).to(device)
-            feats = model(batch)
             features.append(feats.cpu().numpy().astype(np.float16))
 
     del patches
@@ -194,7 +206,7 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # Load model once, reuse for all slides
-    model, transform, device = load_model(args.model)
+    model, device = load_model(args.model)
 
     # Adjust batch size for CPU
     if device.type == "cpu" and args.batch_size > 16:
@@ -231,7 +243,7 @@ def main():
 
             # Step 2: Extract features
             features, coords = extract_slide_features(
-                slide_out, model, transform, device, args.batch_size
+                slide_out, model, device, args.batch_size
             )
 
             # Step 3: Cleanup tiles
@@ -268,7 +280,7 @@ def main():
             print(f"[{i+1}/{len(slide_dirs)}] {slide_name}")
 
             features, coords = extract_slide_features(
-                slide_dir, model, transform, device, args.batch_size
+                slide_dir, model, device, args.batch_size
             )
 
             if features is None:
