@@ -145,7 +145,8 @@ def extract_slide_features(slide_dir, model, transform, device,
 
             batch = torch.stack(tensors).to(device)
             feats = model(batch)
-            features.append(feats.cpu().numpy())
+            features.append(feats.cpu().numpy().astype(np.float16))
+
 
     features = np.vstack(features)
     return features, coords
@@ -203,8 +204,8 @@ def main():
 
         # Save as HDF5 — efficient for large arrays, supports metadata
         with h5py.File(out_path, "w") as f:
-            f.create_dataset("features", data=features, compression="gzip")
-            f.create_dataset("coords", data=coords)
+            f.create_dataset("features", data=features, compression="gzip", compression_opts=9)
+            f.create_dataset("coords", data=coords, compression_opts = 9)
             f.attrs["model"] = args.model
             f.attrs["slide_name"] = slide_name
             f.attrs["num_patches"] = features.shape[0]
