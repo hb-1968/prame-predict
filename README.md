@@ -76,9 +76,17 @@ MIL aggregation pipeline.
 python 01_download_data.py              # Fetch expression data, generate slide manifest
 # Download WSIs via gdc-client:
 # gdc-client download -m data/expression/gdc_manifest.txt -d data/wsi -n 4
-python 02_tile_wsi.py                   # Tile WSIs into patches
-python 03_extract_features.py --model uni    # Extract UNI embeddings
-python 03_extract_features.py --model conch  # Extract CONCH embeddings
+
+# Option A: Pipeline mode (recommended — tiles, extracts, and cleans up per slide)
+# Peak ~11GB temp disk per slide (at default 80K patch cap), cleaned up automatically
+python 03_extract_features.py --model uni --pipeline
+python 03_extract_features.py --model conch --pipeline
+
+# Option B: Separate steps (requires disk space for all tiles simultaneously)
+python 02_tile_wsi.py --all             # Tile all WSIs into patches (.npy, max 80K per slide)
+python 03_extract_features.py --model uni --all
+python 03_extract_features.py --model conch --all
+
 python 04_train_mil.py --model uni           # Train attention MIL classifier
 python 04_train_mil.py --model conch         # Train attention MIL classifier
 python 05_generate_heatmaps.py               # Visualize attention on WSIs
@@ -88,12 +96,17 @@ python 06_compare_models.py                  # Side-by-side evaluation
 ## Compute Setup
 
 Development on a Windows laptop (CPU only). Heavy compute (tiling,
-feature extraction) on Google Colab with a G4 GPU. The Colab notebook
-downloads WSIs directly from the GDC API, tiles them, extracts features
-with UNI/CONCH, saves the resulting embeddings to Google Drive, then
-deletes the WSI and tile files to free space — all within a single
-automated loop. No manual file uploads are required; the notebook
-handles the full download-through-extraction pipeline on its own.
+feature extraction) on Google Colab with a G4 GPU. The `--pipeline`
+mode in `03_extract_features.py` tiles each slide, extracts embeddings,
+and deletes the intermediate tile files before moving to the next slide
+— keeping temporary disk usage under ~11GB per slide (at the default
+80K patch cap). Slides exceeding 80K tissue patches are randomly
+sampled down. This is critical given the ~27GB of free disk space
+remaining after WSI storage (~200GB).
+
+The Colab notebook provides the same tile-extract-cleanup loop,
+downloading WSIs directly from the GDC API and saving only embeddings
+to Google Drive.
 
 ## Environment
 ```bash

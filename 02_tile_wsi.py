@@ -10,11 +10,20 @@ Usage:
 """
 
 import argparse
+import os
+import threading
 import numpy as np
 from pathlib import Path
-from PIL import Image
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import openslide
 import cv2
+import torch
+from tqdm import tqdm
+
+torch.set_num_threads(torch.get_num_threads())
+
+# Thread-local storage for reusing OpenSlide handles
+_thread_local = threading.local()
 
 
 def get_20x_level(slide):
@@ -22,42 +31,38 @@ def get_20x_level(slide):
     Determine which pyramid level corresponds to 20x magnification
     and what downsample factor to apply.
 
-    OpenSlide stores the scan magnification in properties.
-    A 40x-scanned slide has level 0 at 40x, so we need
-    downsample=2 to reach 20x. A 20x-scanned slide needs
-    downsample=1 (read directly from level 0).
+    Always prefers oversampling (reading at >= 20x and downscaling)
+    over undersampling (reading below 20x and upscaling), since
+    downscaling preserves spatial detail while upscaling fabricates it.
 
     Returns:
         level: which pyramid level to read from
-        downsample: additional scaling needed after reading
+        scale: ratio of effective magnification to 20x (>= 1.0 means downscale)
     """
-    # Get the objective magnification from slide metadata
     obj_power = slide.properties.get(openslide.PROPERTY_NAME_OBJECTIVE_POWER)
 
     if obj_power is None:
-        # If metadata is missing, assume 20x and read from level 0
         print("  Warning: no magnification metadata, assuming 20x")
         return 0, 1.0
 
     obj_power = float(obj_power)
     target = 20.0
 
-    # Find the pyramid level closest to 20x
-    # Each level has a downsample factor relative to level 0
+    # Find the best level at or above 20x (prefer downscaling over upscaling)
     best_level = 0
-    best_diff = float("inf")
+    best_mag = obj_power  # level 0 is always >= any lower level
+
     for level in range(slide.level_count):
         level_downsample = slide.level_downsamples[level]
         effective_mag = obj_power / level_downsample
-        diff = abs(effective_mag - target)
-        if diff < best_diff:
-            best_diff = diff
-            best_level = level
-            best_downsample = level_downsample
 
-    effective_mag = obj_power / best_downsample
-    scale = effective_mag / target  # additional scaling if not exactly 20x
+        if effective_mag >= target - 0.1:  # at or above 20x (with float tolerance)
+            # Prefer the level closest to 20x from above (least oversampling)
+            if effective_mag < best_mag or best_mag < target:
+                best_mag = effective_mag
+                best_level = level
 
+    scale = best_mag / target
     return best_level, scale
 
 
@@ -110,89 +115,164 @@ def detect_tissue(slide, thumb_size=2048, sat_threshold=20):
     return mask, scale_x, scale_y
 
 
-def extract_patches(slide, mask, scale_x, scale_y, level, level_scale,
-                    patch_size=224, tissue_threshold=0.5):
+def _find_tissue_coords(mask, scale_x, scale_y, read_size, tissue_threshold=0.5):
     """
-    Extract patches from tissue regions.
+    Scan the tissue mask and return full-resolution coordinates for
+    every grid cell that passes the tissue coverage threshold.
+    """
+    thumb_patch_w = max(int(read_size / scale_x), 1)
+    thumb_patch_h = max(int(read_size / scale_y), 1)
+    mask_h, mask_w = mask.shape
 
-    Iterates over the tissue mask in a grid. For each grid position,
-    checks if at least tissue_threshold fraction of the patch area
-    overlaps with tissue. If so, reads the full-resolution patch
-    from OpenSlide.
+    coords = []
+    for y in range(0, mask_h - thumb_patch_h + 1, thumb_patch_h):
+        for x in range(0, mask_w - thumb_patch_w + 1, thumb_patch_w):
+            tissue_ratio = mask[y:y + thumb_patch_h, x:x + thumb_patch_w].mean()
+            if tissue_ratio >= tissue_threshold:
+                coords.append((int(x * scale_x), int(y * scale_y)))
+    return coords
+
+
+def _get_slide_handle(slide_path):
+    """Get or create a thread-local OpenSlide handle (avoids re-opening per patch)."""
+    key = str(slide_path)
+    if not hasattr(_thread_local, 'handles'):
+        _thread_local.handles = {}
+    if key not in _thread_local.handles:
+        _thread_local.handles[key] = openslide.OpenSlide(key)
+    return _thread_local.handles[key]
+
+
+def _close_thread_handles():
+    """Close all thread-local OpenSlide handles."""
+    if hasattr(_thread_local, 'handles'):
+        for s in _thread_local.handles.values():
+            s.close()
+        _thread_local.handles.clear()
+
+
+def _read_patch_into(slide_path, coord, level, read_size, patch_size, out_array, idx):
+    """
+    Read a patch and write it directly into a pre-allocated array slot.
+    Bypasses PIL for conversion and resize — goes straight to numpy/cv2.
+    """
+    slide = _get_slide_handle(slide_path)
+    region = slide.read_region(coord, level, (read_size, read_size))
+
+    # RGBA buffer straight to numpy, drop alpha
+    rgba = np.frombuffer(region.tobytes(), dtype=np.uint8).reshape(read_size, read_size, 4)
+    rgb = rgba[:, :, :3]
+
+    if read_size != patch_size:
+        # cv2.resize is 3-5x faster than PIL.resize
+        out_array[idx] = cv2.resize(rgb, (patch_size, patch_size), interpolation=cv2.INTER_LINEAR)
+    else:
+        out_array[idx] = rgb
+
+
+def extract_patches(slide_path, mask, scale_x, scale_y, level, level_scale,
+                    out_path, patch_size=224, tissue_threshold=0.5, workers=1,
+                    chunk_size=2048, max_patches=None):
+    """
+    Extract patches from tissue regions into a memory-mapped .npy file.
+
+    Processes patches in chunks to keep RAM usage bounded regardless of
+    slide size. Each chunk is read into a temporary buffer, then flushed
+    to the memory-mapped file on disk.
 
     Args:
-        slide: OpenSlide object
+        slide_path: path to the .svs file
         mask: binary tissue mask at thumbnail resolution
         scale_x, scale_y: coordinate mapping from thumbnail to full-res
         level: pyramid level to read from
         level_scale: additional scaling for exact 20x
+        out_path: path to write patches.npy
         patch_size: output patch dimensions (224 for foundation models)
         tissue_threshold: minimum fraction of patch that must be tissue
+        workers: number of threads for parallel reads
+        chunk_size: patches per chunk (~300MB RAM at 224x224x3)
+        max_patches: if set, randomly sample down to this many patches
 
     Returns:
-        patches: list of PIL Images
+        num_patches: number of patches extracted
         coords: list of (x, y) tuples in full-resolution coordinates
     """
-    # Size of patch in full-resolution coordinates
-    # If level_scale > 1, we need to read a larger region and resize
     read_size = int(patch_size * level_scale)
+    coords = _find_tissue_coords(mask, scale_x, scale_y, read_size, tissue_threshold)
 
-    # Size of patch in thumbnail coordinates
-    thumb_patch_w = int(read_size / scale_x)
-    thumb_patch_h = int(read_size / scale_y)
+    if not coords:
+        np.save(out_path, np.empty((0, patch_size, patch_size, 3), dtype=np.uint8))
+        return 0, []
 
-    # Ensure minimum 1 pixel in thumbnail space
-    thumb_patch_w = max(thumb_patch_w, 1)
-    thumb_patch_h = max(thumb_patch_h, 1)
+    if max_patches and len(coords) > max_patches:
+        print(f"  Sampling {max_patches} of {len(coords)} tissue patches")
+        rng = np.random.default_rng(42)
+        indices = rng.choice(len(coords), size=max_patches, replace=False)
+        indices.sort()  # preserve spatial locality for sequential disk reads
+        coords = [coords[i] for i in indices]
 
-    mask_h, mask_w = mask.shape
-    patches = []
-    coords = []
+    n = len(coords)
 
-    # Stride across the mask in patch-sized steps
-    for y in range(0, mask_h - thumb_patch_h + 1, thumb_patch_h):
-        for x in range(0, mask_w - thumb_patch_w + 1, thumb_patch_w):
-            # Check tissue coverage in this patch region
-            patch_mask = mask[y:y + thumb_patch_h, x:x + thumb_patch_w]
-            tissue_ratio = patch_mask.mean()
+    # Create memory-mapped file on disk — no RAM allocation for full array
+    # Write the .npy header first, then mmap it
+    dummy = np.lib.format.open_memmap(
+        str(out_path), mode='w+', dtype=np.uint8,
+        shape=(n, patch_size, patch_size, 3)
+    )
+    del dummy  # close the initial handle
 
-            if tissue_ratio < tissue_threshold:
-                continue
+    mmap = np.lib.format.open_memmap(str(out_path), mode='r+')
 
-            # Convert thumbnail coordinates to full-resolution
-            full_x = int(x * scale_x)
-            full_y = int(y * scale_y)
+    pbar = tqdm(total=n, desc="  Reading patches", unit="patch")
 
-            # Read patch from slide at the chosen pyramid level
-            # OpenSlide.read_region always takes level-0 coordinates
-            patch = slide.read_region(
-                (full_x, full_y),  # top-left corner in level-0 coords
-                level,             # which pyramid level to read from
-                (read_size, read_size)  # size in level pixels
-            )
+    def _process_chunks():
+        for chunk_start in range(0, n, chunk_size):
+            chunk_end = min(chunk_start + chunk_size, n)
+            chunk_coords = coords[chunk_start:chunk_end]
+            chunk_len = chunk_end - chunk_start
 
-            # Convert RGBA to RGB (OpenSlide returns RGBA)
-            patch = patch.convert("RGB")
+            # Temporary RAM buffer for this chunk only
+            buf = np.empty((chunk_len, patch_size, patch_size, 3), dtype=np.uint8)
 
-            # Resize to exact patch_size if we read a larger region
-            if read_size != patch_size:
-                patch = patch.resize(
-                    (patch_size, patch_size),
-                    Image.LANCZOS
-                )
+            if workers <= 1:
+                for i, c in enumerate(chunk_coords):
+                    _read_patch_into(slide_path, c, level, read_size, patch_size, buf, i)
+                    pbar.update(1)
+            else:
+                futures = {
+                    pool.submit(_read_patch_into, slide_path, c, level,
+                                read_size, patch_size, buf, i): i
+                    for i, c in enumerate(chunk_coords)
+                }
+                for f in as_completed(futures):
+                    f.result()
+                    pbar.update(1)
 
-            patches.append(patch)
-            coords.append((full_x, full_y))
+            # Flush chunk to disk via memmap
+            mmap[chunk_start:chunk_end] = buf
+            mmap.flush()
+            del buf
 
-    return patches, coords
+    if workers <= 1:
+        pool = None
+        _process_chunks()
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            _process_chunks()
+
+    pbar.close()
+    del mmap
+
+    return n, coords
 
 
-def tile_slide(slide_path, patch_size=224):
+def tile_slide(slide_path, out_dir, patch_size=224, workers=1, max_patches=None):
     """
-    Full tiling pipeline for a single slide.
+    Full tiling pipeline for a single slide. Writes patches.npy and
+    coords.npy to out_dir using memory-mapped I/O for bounded RAM.
 
     Returns:
-        patches: list of PIL Images (224x224 RGB)
+        num_patches: number of patches extracted
         coords: list of (x, y) full-resolution coordinates
     """
     slide = openslide.OpenSlide(str(slide_path))
@@ -204,13 +284,16 @@ def tile_slide(slide_path, patch_size=224):
     print(f"  Using level {level} (scale {level_scale:.2f}) for 20x")
 
     mask, scale_x, scale_y = detect_tissue(slide)
-    patches, coords = extract_patches(
-        slide, mask, scale_x, scale_y, level, level_scale, patch_size
+    slide.close()
+
+    patches_path = Path(out_dir) / "patches.npy"
+    num_patches, coords = extract_patches(
+        slide_path, mask, scale_x, scale_y, level, level_scale,
+        patches_path, patch_size, workers=workers, max_patches=max_patches
     )
 
-    slide.close()
-    print(f"  Extracted {len(patches)} patches")
-    return patches, coords
+    print(f"  Extracted {num_patches} patches")
+    return num_patches, coords
 
 
 def main():
@@ -219,9 +302,15 @@ def main():
     parser.add_argument("--all", action="store_true", help="process all slides")
     parser.add_argument("--wsi-dir", default="data/wsi")
     parser.add_argument("--out-dir", default="data/tiles")
+    parser.add_argument("--max-patches", type=int, default=80000,
+                        help="max patches per slide; randomly sample if exceeded (default: 80000)")
+    parser.add_argument("--workers", type=int, default=os.cpu_count(),
+                        help="number of parallel workers (default: all CPUs)")
     args = parser.parse_args()
 
     out_dir = Path(args.out_dir)
+    workers = max(1, args.workers)
+    print(f"Using {workers} workers")
 
     if args.slide:
         slides = [Path(args.slide)]
@@ -245,14 +334,14 @@ def main():
 
         slide_out.mkdir(parents=True, exist_ok=True)
 
-        patches, coords = tile_slide(slide_path)
+        num_patches, coords = tile_slide(slide_path, slide_out, workers=workers,
+                                         max_patches=args.max_patches)
 
-        # Save patches as JPEG (smaller than PNG, fine for features)
-        for j, patch in enumerate(patches):
-            patch.save(slide_out / f"{j:05d}.jpg", quality=95)
-
-        # Save coordinates for heatmap reconstruction later
+        # Save coordinates for heatmap reconstruction
         np.save(coord_path, np.array(coords))
+
+        # Clean up thread-local OpenSlide handles between slides
+        _close_thread_handles()
 
         print(f"  Saved to {slide_out}")
 

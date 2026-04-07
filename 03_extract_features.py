@@ -7,13 +7,16 @@ in batches, and saves the feature matrix as an HDF5 file.
 Usage:
     python 03_extract_features.py --model uni --slide data/tiles/TCGA-XX-XXXX
     python 03_extract_features.py --model uni --all
+    python 03_extract_features.py --model uni --pipeline  # tile + extract + cleanup per slide
 """
 
 import argparse
+import shutil
 import torch
 import timm
 import numpy as np
 import h5py
+import os
 from pathlib import Path
 from PIL import Image
 from timm.data import resolve_data_config, create_transform
@@ -112,7 +115,7 @@ def extract_slide_features(slide_dir, model, transform, device,
     Extract features for all patches in a single slide directory.
 
     Args:
-        slide_dir: Path containing numbered JPEG patches and coords.npy
+        slide_dir: Path containing patches.npy and coords.npy
         model: frozen encoder
         transform: preprocessing pipeline
         device: cuda or cpu
@@ -122,34 +125,52 @@ def extract_slide_features(slide_dir, model, transform, device,
         features: numpy array of shape (num_patches, feature_dim)
         coords: numpy array of shape (num_patches, 2)
     """
-    # Find all patch images, sorted by number
-    patch_paths = sorted(slide_dir.glob("*.jpg"))
+    patches_path = slide_dir / "patches.npy"
 
-    if len(patch_paths) == 0:
-        print(f"  No patches found in {slide_dir}")
+    if not patches_path.exists():
+        print(f"  No patches.npy found in {slide_dir}")
         return None, None
 
+    # Memory-map patches — reads from disk on demand, no full load into RAM
+    patches = np.load(patches_path, mmap_mode='r')
     coords = np.load(slide_dir / "coords.npy")
+
+    if len(patches) == 0:
+        print(f"  Empty patches array in {slide_dir}")
+        return None, None
 
     features = []
 
     with torch.no_grad():
-        for i in tqdm(range(0, len(patch_paths), batch_size),
+        for i in tqdm(range(0, len(patches), batch_size),
                       desc=f"  Extracting", leave=False):
-            batch_paths = patch_paths[i:i + batch_size]
+            batch_np = np.array(patches[i:i + batch_size])  # copy chunk from mmap
             tensors = []
 
-            for p in batch_paths:
-                img = Image.open(p).convert("RGB")
+            for arr in batch_np:
+                img = Image.fromarray(arr)
                 tensors.append(transform(img))
 
             batch = torch.stack(tensors).to(device)
             feats = model(batch)
             features.append(feats.cpu().numpy().astype(np.float16))
 
+    del patches
 
     features = np.vstack(features)
     return features, coords
+
+
+def save_features(out_path, features, coords, model_name, slide_name):
+    """Save extracted features as compressed HDF5."""
+    with h5py.File(out_path, "w") as f:
+        f.create_dataset("features", data=features, compression="gzip", compression_opts=9)
+        f.create_dataset("coords", data=coords, compression="gzip", compression_opts=9)
+        f.attrs["model"] = model_name
+        f.attrs["slide_name"] = slide_name
+        f.attrs["num_patches"] = features.shape[0]
+        f.attrs["feature_dim"] = features.shape[1]
+    print(f"  Saved {features.shape} to {out_path}")
 
 
 def main():
@@ -157,23 +178,20 @@ def main():
     parser.add_argument("--model", required=True, choices=["uni", "conch"])
     parser.add_argument("--slide", type=str, help="path to a single tile dir")
     parser.add_argument("--all", action="store_true")
+    parser.add_argument("--pipeline", action="store_true",
+                        help="tile + extract + cleanup per slide (minimal disk usage)")
+    parser.add_argument("--wsi-dir", default="data/wsi")
     parser.add_argument("--tiles-dir", default="data/tiles")
     parser.add_argument("--out-dir", default="embeddings")
     parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument("--max-patches", type=int, default=80000,
+                        help="max patches per slide for --pipeline mode (default: 80000)")
+    parser.add_argument("--workers", type=int, default=os.cpu_count(),
+                        help="tiling workers for --pipeline mode (default: all CPUs)")
     args = parser.parse_args()
 
     out_dir = Path(args.out_dir) / args.model
     out_dir.mkdir(parents=True, exist_ok=True)
-
-    if args.slide:
-        slide_dirs = [Path(args.slide)]
-    elif args.all:
-        slide_dirs = sorted(
-            [d for d in Path(args.tiles_dir).iterdir() if d.is_dir()]
-        )
-    else:
-        print("Specify --slide <path> or --all")
-        return
 
     # Load model once, reuse for all slides
     model, transform, device = load_model(args.model)
@@ -183,35 +201,80 @@ def main():
         print(f"CPU detected, reducing batch size to 16")
         args.batch_size = 16
 
-    print(f"\nProcessing {len(slide_dirs)} slides")
+    if args.pipeline:
+        # Pipeline mode: tile → extract → delete, one slide at a time
+        import importlib
+        tile_mod = importlib.import_module("02_tile_wsi")
+        tile_slide = tile_mod.tile_slide
+        _close_thread_handles = tile_mod._close_thread_handles
+        slides = sorted(Path(args.wsi_dir).glob("*.svs"))
+        print(f"\nPipeline mode: {len(slides)} slides")
+        tiles_dir = Path(args.tiles_dir)
 
-    for i, slide_dir in enumerate(slide_dirs):
-        slide_name = slide_dir.name
-        out_path = out_dir / f"{slide_name}.h5"
+        for i, slide_path in enumerate(slides):
+            slide_name = slide_path.stem
+            out_path = out_dir / f"{slide_name}.h5"
 
-        if out_path.exists():
-            print(f"[{i+1}/{len(slide_dirs)}] Skipping {slide_name} (exists)")
-            continue
+            if out_path.exists():
+                print(f"[{i+1}/{len(slides)}] Skipping {slide_name} (exists)")
+                continue
 
-        print(f"[{i+1}/{len(slide_dirs)}] {slide_name}")
+            print(f"\n[{i+1}/{len(slides)}] {slide_name}")
+            slide_out = tiles_dir / slide_name
+            slide_out.mkdir(parents=True, exist_ok=True)
 
-        features, coords = extract_slide_features(
-            slide_dir, model, transform, device, args.batch_size
-        )
+            # Step 1: Tile (writes patches.npy via memmap, bounded RAM)
+            num_patches, coords = tile_slide(slide_path, slide_out, workers=max(1, args.workers),
+                                             max_patches=args.max_patches)
+            np.save(slide_out / "coords.npy", np.array(coords))
+            _close_thread_handles()
 
-        if features is None:
-            continue
+            # Step 2: Extract features
+            features, coords = extract_slide_features(
+                slide_out, model, transform, device, args.batch_size
+            )
 
-        # Save as HDF5 — efficient for large arrays, supports metadata
-        with h5py.File(out_path, "w") as f:
-            f.create_dataset("features", data=features, compression="gzip", compression_opts=9)
-            f.create_dataset("coords", data=coords, compression_opts = 9)
-            f.attrs["model"] = args.model
-            f.attrs["slide_name"] = slide_name
-            f.attrs["num_patches"] = features.shape[0]
-            f.attrs["feature_dim"] = features.shape[1]
+            # Step 3: Cleanup tiles
+            shutil.rmtree(slide_out)
+            print(f"  Cleaned up {slide_out}")
 
-        print(f"  Saved {features.shape} to {out_path}")
+            if features is None:
+                continue
+
+            save_features(out_path, features, coords, args.model, slide_name)
+
+    else:
+        # Standard mode: tiles already exist on disk
+        if args.slide:
+            slide_dirs = [Path(args.slide)]
+        elif args.all:
+            slide_dirs = sorted(
+                [d for d in Path(args.tiles_dir).iterdir() if d.is_dir()]
+            )
+        else:
+            print("Specify --slide <path>, --all, or --pipeline")
+            return
+
+        print(f"\nProcessing {len(slide_dirs)} slides")
+
+        for i, slide_dir in enumerate(slide_dirs):
+            slide_name = slide_dir.name
+            out_path = out_dir / f"{slide_name}.h5"
+
+            if out_path.exists():
+                print(f"[{i+1}/{len(slide_dirs)}] Skipping {slide_name} (exists)")
+                continue
+
+            print(f"[{i+1}/{len(slide_dirs)}] {slide_name}")
+
+            features, coords = extract_slide_features(
+                slide_dir, model, transform, device, args.batch_size
+            )
+
+            if features is None:
+                continue
+
+            save_features(out_path, features, coords, args.model, slide_name)
 
 
 if __name__ == "__main__":
