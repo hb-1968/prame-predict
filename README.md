@@ -96,17 +96,39 @@ python 06_compare_models.py                  # Side-by-side evaluation
 ## Compute Setup
 
 Development on a Windows laptop (CPU only). Heavy compute (tiling,
-feature extraction) on Google Colab with a G4 GPU. The `--pipeline`
-mode in `03_extract_features.py` tiles each slide, extracts embeddings,
-and deletes the intermediate tile files before moving to the next slide
-— keeping temporary disk usage under ~11GB per slide (at the default
-80K patch cap). Slides exceeding 80K tissue patches are randomly
-sampled down. This is critical given the ~27GB of free disk space
-remaining after WSI storage (~200GB).
+feature extraction) on Google Colab with a T4 GPU. The Colab notebook
+(`notebooks/prame_predict.ipynb`) handles the full pipeline:
+downloading WSIs from the GDC API, tiling, extracting features with
+both UNI and CONCH, and saving embeddings to Google Drive. WSIs are
+deleted after processing to manage disk space.
 
-The Colab notebook provides the same tile-extract-cleanup loop,
-downloading WSIs directly from the GDC API and saving only embeddings
-to Google Drive.
+### Colab Pipeline Optimizations
+
+- **In-memory tiling**: Patches are built directly in RAM instead of
+  writing to disk via memmap, eliminating the disk round-trip when
+  patches are consumed immediately for feature extraction.
+- **Thread-local OpenSlide handles**: Avoids re-opening the SVS file
+  per patch. 8 parallel worker threads overlap JPEG decode I/O.
+- **GPU-resident extraction**: When patches fit in VRAM (with 2GB
+  headroom), all patches are pre-loaded onto the GPU as a single
+  tensor. Batches are sliced directly from VRAM, eliminating
+  CPU-to-GPU transfer during inference. Falls back to a CPU-side
+  prefetcher for slides that exceed GPU memory.
+- **torch.compile**: Model is compiled on first batch for fused
+  operations and ~10-20% inference speedup on subsequent batches.
+- **Float16 inference**: `torch.amp.autocast` for forward pass,
+  embeddings saved as float16 in compressed HDF5.
+- **Resumable**: Slides with existing `.h5` embeddings are skipped
+  automatically, allowing safe interruption and restart.
+- **Batch downloads**: WSIs are downloaded in batches of 75 with 16
+  parallel threads and connection pooling. Cleaned up after each batch.
+
+### Slide Statistics
+
+- **200 slides** downloaded from TCGA-SKCM
+- **Median ~26K patches per slide** at 20x magnification, 224x224 pixels
+- **Embeddings**: ~10MB per slide per model (compressed HDF5)
+- **Tiling + extraction target**: ~5 minutes per median slide
 
 ## Environment
 ```bash

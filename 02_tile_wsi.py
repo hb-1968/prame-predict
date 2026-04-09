@@ -172,13 +172,14 @@ def _read_patch_into(slide_path, coord, level, read_size, patch_size, out_array,
 
 def extract_patches(slide_path, mask, scale_x, scale_y, level, level_scale,
                     out_path, patch_size=224, tissue_threshold=0.5, workers=1,
-                    chunk_size=2048, max_patches=None):
+                    chunk_size=2048, max_patches=None, in_memory=False):
     """
-    Extract patches from tissue regions into a memory-mapped .npy file.
+    Extract patches from tissue regions.
 
-    Processes patches in chunks to keep RAM usage bounded regardless of
-    slide size. Each chunk is read into a temporary buffer, then flushed
-    to the memory-mapped file on disk.
+    When in_memory=False (default), writes to a memory-mapped .npy file on disk.
+    When in_memory=True, builds the array in RAM and skips disk I/O entirely.
+    Use in_memory=True when patches will be consumed immediately (e.g., Colab
+    pipeline where extraction follows tiling with no intermediate save).
 
     Args:
         slide_path: path to the .svs file
@@ -186,22 +187,27 @@ def extract_patches(slide_path, mask, scale_x, scale_y, level, level_scale,
         scale_x, scale_y: coordinate mapping from thumbnail to full-res
         level: pyramid level to read from
         level_scale: additional scaling for exact 20x
-        out_path: path to write patches.npy
+        out_path: path to write patches.npy (ignored if in_memory=True)
         patch_size: output patch dimensions (224 for foundation models)
         tissue_threshold: minimum fraction of patch that must be tissue
         workers: number of threads for parallel reads
         chunk_size: patches per chunk (~300MB RAM at 224x224x3)
         max_patches: if set, randomly sample down to this many patches
+        in_memory: if True, return patches array directly instead of writing to disk
 
     Returns:
         num_patches: number of patches extracted
         coords: list of (x, y) tuples in full-resolution coordinates
+        patches (only if in_memory=True): numpy array of shape (N, 224, 224, 3)
     """
     read_size = int(patch_size * level_scale)
     coords = _find_tissue_coords(mask, scale_x, scale_y, read_size, tissue_threshold)
 
     if not coords:
-        np.save(out_path, np.empty((0, patch_size, patch_size, 3), dtype=np.uint8))
+        empty = np.empty((0, patch_size, patch_size, 3), dtype=np.uint8)
+        if in_memory:
+            return 0, [], empty
+        np.save(out_path, empty)
         return 0, []
 
     if max_patches and len(coords) > max_patches:
@@ -213,15 +219,17 @@ def extract_patches(slide_path, mask, scale_x, scale_y, level, level_scale,
 
     n = len(coords)
 
-    # Create memory-mapped file on disk — no RAM allocation for full array
-    # Write the .npy header first, then mmap it
-    dummy = np.lib.format.open_memmap(
-        str(out_path), mode='w+', dtype=np.uint8,
-        shape=(n, patch_size, patch_size, 3)
-    )
-    del dummy  # close the initial handle
-
-    mmap = np.lib.format.open_memmap(str(out_path), mode='r+')
+    if in_memory:
+        # Allocate full array in RAM — no disk I/O
+        patches = np.empty((n, patch_size, patch_size, 3), dtype=np.uint8)
+    else:
+        # Create memory-mapped file on disk
+        dummy = np.lib.format.open_memmap(
+            str(out_path), mode='w+', dtype=np.uint8,
+            shape=(n, patch_size, patch_size, 3)
+        )
+        del dummy
+        patches = np.lib.format.open_memmap(str(out_path), mode='r+')
 
     pbar = tqdm(total=n, desc="  Reading patches", unit="patch")
 
@@ -231,27 +239,25 @@ def extract_patches(slide_path, mask, scale_x, scale_y, level, level_scale,
             chunk_coords = coords[chunk_start:chunk_end]
             chunk_len = chunk_end - chunk_start
 
-            # Temporary RAM buffer for this chunk only
-            buf = np.empty((chunk_len, patch_size, patch_size, 3), dtype=np.uint8)
+            # Write directly into the output array (RAM or memmap)
+            out_slice = patches[chunk_start:chunk_end]
 
             if workers <= 1:
                 for i, c in enumerate(chunk_coords):
-                    _read_patch_into(slide_path, c, level, read_size, patch_size, buf, i)
+                    _read_patch_into(slide_path, c, level, read_size, patch_size, out_slice, i)
                     pbar.update(1)
             else:
                 futures = {
                     pool.submit(_read_patch_into, slide_path, c, level,
-                                read_size, patch_size, buf, i): i
+                                read_size, patch_size, out_slice, i): i
                     for i, c in enumerate(chunk_coords)
                 }
                 for f in as_completed(futures):
                     f.result()
                     pbar.update(1)
 
-            # Flush chunk to disk via memmap
-            mmap[chunk_start:chunk_end] = buf
-            mmap.flush()
-            del buf
+            if not in_memory:
+                patches.flush()
 
     if workers <= 1:
         pool = None
@@ -261,19 +267,26 @@ def extract_patches(slide_path, mask, scale_x, scale_y, level, level_scale,
             _process_chunks()
 
     pbar.close()
-    del mmap
 
-    return n, coords
+    if in_memory:
+        return n, coords, patches
+    else:
+        del patches
+        return n, coords
 
 
-def tile_slide(slide_path, out_dir, patch_size=224, workers=1, max_patches=None):
+def tile_slide(slide_path, out_dir, patch_size=224, workers=1, max_patches=None,
+               in_memory=False):
     """
-    Full tiling pipeline for a single slide. Writes patches.npy and
-    coords.npy to out_dir using memory-mapped I/O for bounded RAM.
+    Full tiling pipeline for a single slide.
+
+    When in_memory=False (default), writes patches.npy to out_dir via memmap.
+    When in_memory=True, returns patches array directly in RAM — no disk I/O.
 
     Returns:
         num_patches: number of patches extracted
         coords: list of (x, y) full-resolution coordinates
+        patches (only if in_memory=True): numpy array of shape (N, 224, 224, 3)
     """
     slide = openslide.OpenSlide(str(slide_path))
 
@@ -287,13 +300,20 @@ def tile_slide(slide_path, out_dir, patch_size=224, workers=1, max_patches=None)
     slide.close()
 
     patches_path = Path(out_dir) / "patches.npy"
-    num_patches, coords = extract_patches(
+    result = extract_patches(
         slide_path, mask, scale_x, scale_y, level, level_scale,
-        patches_path, patch_size, workers=workers, max_patches=max_patches
+        patches_path, patch_size, workers=workers, max_patches=max_patches,
+        in_memory=in_memory
     )
 
-    print(f"  Extracted {num_patches} patches")
-    return num_patches, coords
+    if in_memory:
+        num_patches, coords, patches = result
+        print(f"  Extracted {num_patches} patches (in-memory)")
+        return num_patches, coords, patches
+    else:
+        num_patches, coords = result
+        print(f"  Extracted {num_patches} patches")
+        return num_patches, coords
 
 
 def main():
