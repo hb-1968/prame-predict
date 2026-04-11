@@ -45,7 +45,8 @@ alongside morphological features.
 - **Full cohort**: 469 unique cases with PRAME expression data
 - **Expression stats**: Min 0.00, Q25 224.61, Median 437.93, Q75 632.46,
   Max 2673.94 TPM
-- **Training set**: All matched slides (~227 slides) — full expression range
+- **Training set**: 200 slides with embeddings — quartile extremes only (100 high, 100 low)
+- **Patients**: 194 unique (4 patients have multiple slides — handled by patient-level CV splitting)
 - **Ground-truth evaluation subset**: Quartile extremes (high ≥ Q75, low ≤ Q25)
   where PRAME is clinically reliable
 - **Middle cases**: Included in training but separately tracked for
@@ -71,6 +72,24 @@ clinical thresholds downstream.
 Both models are compared as frozen feature extractors under the same
 MIL aggregation pipeline.
 
+### MIL Classifier
+
+Gated Attention-based MIL (Ilse et al. 2018) for slide-level
+classification. Each slide's patch embeddings are transformed through
+a feature network, weighted by a learned gated attention mechanism
+(element-wise product of tanh and sigmoid branches), aggregated into
+a fixed-size slide representation, and classified as high or low PRAME.
+
+- **Architecture**: Linear(feat_dim, 256) + ReLU + Dropout(0.25) →
+  Gated Attention(256, 128) → Linear(256, 1)
+- **Training**: Patient-level stratified 5-fold cross-validation
+  (prevents data leakage from patients with multiple slides)
+- **Optimization**: Adam (lr=1e-4, weight_decay=1e-4), cosine
+  annealing LR, early stopping on validation AUC (patience=10)
+- **Loss**: BCEWithLogitsLoss (binary: high vs. low PRAME)
+- **Metrics**: AUC, accuracy, sensitivity, specificity (per-fold
+  and pooled across folds)
+
 ## Pipeline
 ```bash
 python 01_download_data.py              # Fetch expression data, generate slide manifest
@@ -87,8 +106,12 @@ python 02_tile_wsi.py --all             # Tile all WSIs into patches (.npy, max 
 python 03_extract_features.py --model uni --all
 python 03_extract_features.py --model conch --all
 
-python 04_train_mil.py --model uni           # Train attention MIL classifier
-python 04_train_mil.py --model conch         # Train attention MIL classifier
+# Option A: Train locally (CPU)
+python 04_train_mil.py --model uni           # Train attention MIL classifier (5-fold CV)
+python 04_train_mil.py --model conch         # Train attention MIL classifier (5-fold CV)
+
+# Option B: Train on Colab (GPU) — use notebooks/train_mil_colab.ipynb
+# Reads embeddings from Drive, saves models + results back to Drive
 python 05_generate_heatmaps.py               # Visualize attention on WSIs
 python 06_compare_models.py                  # Side-by-side evaluation
 ```
@@ -96,11 +119,21 @@ python 06_compare_models.py                  # Side-by-side evaluation
 ## Compute Setup
 
 Development on a Windows laptop (CPU only). Heavy compute (tiling,
-feature extraction) on Google Colab with a T4 GPU. The Colab notebook
-(`notebooks/prame_predict.ipynb`) handles the full pipeline:
-downloading WSIs from the GDC API, tiling, extracting features with
-both UNI and CONCH, and saving embeddings to Google Drive. WSIs are
-deleted after processing to manage disk space.
+feature extraction, MIL training) on Google Colab with a T4 GPU.
+
+Two Colab notebooks handle the GPU-dependent stages:
+
+- **`notebooks/prame_predict.ipynb`** — Feature extraction pipeline:
+  downloads WSIs from the GDC API, tiles them in-memory, extracts
+  embeddings with both UNI and CONCH, and saves to Google Drive.
+  WSIs are deleted after processing to manage disk space.
+
+- **`notebooks/train_mil_colab.ipynb`** — MIL training: trains the
+  gated attention MIL classifier on pre-extracted embeddings from
+  Drive. Runs patient-level stratified 5-fold CV with early stopping.
+  Saves model weights, per-fold metrics (CSV/JSON), ROC curves, and
+  training curves to Drive. Set `MODEL = "uni"` or `"conch"` to
+  switch between feature sets.
 
 ### Colab Pipeline Optimizations
 
@@ -122,6 +155,19 @@ deleted after processing to manage disk space.
   automatically, allowing safe interruption and restart.
 - **Batch downloads**: WSIs are downloaded in batches of 75 with 16
   parallel threads and connection pooling. Cleaned up after each batch.
+
+### Colab MIL Training
+
+- Clones the repo to access the slide manifest (for labels and
+  patient IDs), then loads embeddings directly from Drive
+- Patient-level stratified splits via `StratifiedGroupKFold` —
+  no patient appears in both train and val within a fold
+- Cosine annealing LR schedule, early stopping on validation AUC
+- Outputs per model saved to `Drive/prame-predict/results/{model}/`:
+  `fold*_model.pt`, `cv_results.csv`, `summary.json`,
+  `cv_results.png`, `training_curves.png`
+- Run twice (once with `MODEL = "uni"`, once with `MODEL = "conch"`)
+  to produce results for both feature extractors
 
 ### Slide Statistics
 
