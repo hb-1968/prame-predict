@@ -1,0 +1,27 @@
+{
+  "model": "uni",
+  "mode": "compare",
+  "seed": 42,
+  "epochs": 50,
+  "regularization": {
+    "entropy_lambda": 0.0001,
+    "grad_clip": 1.0,
+    "label_smoothing": 0.05
+  },
+  "baseline": {
+    "best_epoch": 6,
+    "final_val_auc": 0.86,
+    "final_val_acc": 0.8,
+    "final_sensitivity": 0.8,
+    "final_specificity": 0.8,
+    "final_val_entropy": 9.233973097801208
+  },
+  "regularized": {
+    "best_epoch": 6,
+    "final_val_auc": 0.86,
+    "final_val_acc": 0.825,
+    "final_sensitivity": 0.95,
+    "final_specificity": 0.7,
+    "final_val_entropy": 9.177055728435516
+  }
+}

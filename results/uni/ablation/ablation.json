@@ -1,0 +1,52 @@
+{
+  "model": "uni",
+  "mode": "ablation",
+  "seed": 42,
+  "epochs": 50,
+  "configs": {
+    "baseline": {
+      "entropy_lambda": 0.0,
+      "grad_clip": 0.0,
+      "label_smoothing": 0.0,
+      "best_epoch": 2,
+      "final_val_auc": 0.74,
+      "final_val_acc": 0.6,
+      "final_sensitivity": 0.5,
+      "final_specificity": 0.7,
+      "final_val_entropy": 9.806323480606078
+    },
+    "entropy_only": {
+      "entropy_lambda": 0.001,
+      "grad_clip": 0.0,
+      "label_smoothing": 0.0,
+      "best_epoch": 2,
+      "final_val_auc": 0.74,
+      "final_val_acc": 0.6,
+      "final_sensitivity": 0.5,
+      "final_specificity": 0.7,
+      "final_val_entropy": 9.80632724761963
+    },
+    "grad_clip_only": {
+      "entropy_lambda": 0.0,
+      "grad_clip": 1.0,
+      "label_smoothing": 0.0,
+      "best_epoch": 7,
+      "final_val_auc": 0.72,
+      "final_val_acc": 0.6,
+      "final_sensitivity": 0.5,
+      "final_specificity": 0.7,
+      "final_val_entropy": 9.028725290298462
+    },
+    "label_smooth_only": {
+      "entropy_lambda": 0.0,
+      "grad_clip": 0.0,
+      "label_smoothing": 0.05,
+      "best_epoch": 7,
+      "final_val_auc": 0.76,
+      "final_val_acc": 0.55,
+      "final_sensitivity": 0.4,
+      "final_specificity": 0.7,
+      "final_val_entropy": 9.51163296699524
+    }
+  }
+}
