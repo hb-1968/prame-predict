@@ -153,7 +153,7 @@ Two Colab notebooks handle the GPU-dependent stages:
   embeddings saved as float16 in compressed HDF5.
 - **Resumable**: Slides with existing `.h5` embeddings are skipped
   automatically, allowing safe interruption and restart.
-- **Batch downloads**: WSIs are downloaded in batches of 75 with 16
+- **Batch downloads**: WSIs are downloaded in batches of 50 with 16
   parallel threads and connection pooling. Cleaned up after each batch.
 
 ### Colab MIL Training
