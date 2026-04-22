@@ -205,4 +205,93 @@ Key finding: pathology-specific training data, not architecture alone,
 drives performance gains.
 
 ## Results
-*(To be added)*
+
+Component 1 (PRAME quartile-extreme classification) was trained with
+patient-level stratified 5-fold CV on 200 slides / 194 patients, using
+the production regularization heuristic described below
+(`grad_clip=1.0`, `label_smoothing=0.05`, `entropy_lambda=1e-5`). UNI
+features substantially outperform CONCH features on this task; CONCH
+sits at or near chance.
+
+### Per-fold Validation AUC
+
+| Fold | UNI | CONCH |
+|------|-----|-------|
+| 1 | 0.792 | 0.518 |
+| 2 | 0.774 | 0.569 |
+| 3 | 0.726 | 0.550 |
+| 4 | 0.708 | 0.498 |
+| 5 | 0.708 | 0.545 |
+
+### Aggregate Metrics (5-fold CV)
+
+| Metric | UNI | CONCH |
+|--------|-----|-------|
+| Mean AUC | **0.741 ± 0.035** | 0.536 ± 0.025 |
+| Pooled AUC | **0.734** | 0.481 |
+| Accuracy | 0.660 ± 0.035 | 0.459 ± 0.081 |
+| Sensitivity | 0.631 ± 0.061 | 0.524 ± 0.268 |
+| Specificity | 0.692 ± 0.038 | 0.465 ± 0.316 |
+
+UNI generalizes consistently across folds (AUC std 0.035). CONCH's mean
+AUC is within one std of 0.5 and its pooled AUC is below chance, with
+very high variance on sensitivity/specificity (±0.27 / ±0.32) — the
+CONCH classifier is effectively not learning a PRAME signal from these
+embeddings under the same MIL head. Component 1 therefore uses UNI
+features going into Component 2.
+
+### Training Curves and ROC (Full 5-fold MIL)
+
+**UNI**
+
+![UNI training curves](results/uni/training_curves.png)
+![UNI ROC curves (5-fold CV)](results/uni/cv_results.png)
+
+**CONCH**
+
+![CONCH training curves](results/conch/training_curves.png)
+![CONCH ROC curves (5-fold CV)](results/conch/cv_results.png)
+
+### Regularization
+
+The final 5-fold runs use `grad_clip=1.0`, `label_smoothing=0.05`, and
+a token `entropy_lambda=1e-5` (effectively inert — retained only so the
+regularization entropy is logged for diagnostics). This heuristic was
+chosen after two single-fold studies on the UNI embeddings
+(`04_train_mil_reg.py --ablation` and `--compare`). These studies were
+single-fold by design — intended as fast diagnostic checks rather than
+full evaluations.
+
+**Ablation — each regularizer in isolation (fold 1, UNI)**
+
+| Config | Val AUC | Final entropy |
+|--------|---------|---------------|
+| Baseline (no reg) | 0.74 | 9.81 |
+| Entropy only (λ=1e-3) | 0.74 | 9.81 |
+| Grad clip only (clip=1.0) | 0.72 | 9.03 |
+| Label smoothing only (ε=0.05) | **0.76** | 9.51 |
+
+Attention entropy is already near its theoretical max under the gated
+attention head (≈log N ≈ 10 for ~26k patches), so the entropy
+regularizer is inert on this data. Grad clip trades a small AUC drop
+for a later best-epoch (more training stability). Label smoothing
+alone gives the largest single-fold AUC bump.
+
+**Bundled compare — baseline vs. regularized (fold 1, UNI)**
+
+| Config | Val AUC | Accuracy | Sensitivity | Specificity |
+|--------|---------|----------|-------------|-------------|
+| Baseline | 0.86 | 0.80 | 0.80 | 0.80 |
+| Regularized | 0.86 | 0.825 | 0.95 | 0.70 |
+
+The bundled regularized config matches baseline AUC and shifts the
+decision toward higher sensitivity at the cost of specificity — a
+favorable trade for a screening-style PRAME predictor that feeds the
+Component 3 routing gate.
+
+![UNI ablation: per-regularizer effect](results/uni/ablation/ablation_comparison.png)
+![UNI baseline vs. bundled regularization](results/uni/compare/compare_baseline_vs_reg.png)
+
+Per-fold CSVs, model weights, ROC curves, and training curves are in
+`results/uni/` and `results/conch/`. Regularization diagnostics are
+in `results/uni/ablation/` and `results/uni/compare/`.
