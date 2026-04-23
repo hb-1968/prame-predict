@@ -3,6 +3,9 @@ data/wsi/
 data/tiles/
 embeddings/
 
+# Local research notes (not tracked)
+docs/
+
 # Keep expression data tracked (small CSV files)
 # Keep results tracked (figures, metrics)
 

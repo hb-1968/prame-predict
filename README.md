@@ -326,11 +326,77 @@ wrong — the most diagnostic failure cases). Each PNG is titled with
 slide ID, true label, predicted probability, outcome class, fold, and
 patch count, with a percentile-normalized colormap legend.
 
-Outputs land in `results/{model}/heatmaps/` (gitignored). Held-out
-predictions for all 200 slides are cached alongside as
-`oof_predictions.csv` for downstream analysis.
+Outputs land in `results/{model}/heatmaps/`. Held-out predictions for
+all 200 slides are cached alongside as `oof_predictions.csv` for
+downstream analysis.
+
+#### Qualitative findings
+
+Eight representative slides are embedded below — the two highest-
+`|logit|` cases per outcome class on held-out UNI predictions. The
+same pattern holds across the full 48-slide panel.
+
+**True positives — confident HIGH-PRAME calls.** Attention collapses
+onto compact, high-cellularity tumor nests; surrounding stroma is
+cold. This is the pattern the model rewards: a focal, dense cluster
+of densely packed melanocytes inside an otherwise quiet slide.
+
+| `TCGA-EB-A44O` (prob=0.984, fold 4) | `TCGA-DA-A95Z` (prob=0.980, fold 4) |
+|---|---|
+| ![TP A44O](results/uni/heatmaps/TP_TCGA-EB-A44O-06Z-00-DX1.788C33F2-3766-4792-B8DF-52C5F3E8AEDB.png) | ![TP A95Z](results/uni/heatmaps/TP_TCGA-DA-A95Z-01Z-00-DX1.E34FE26D-097D-4469-8ED3-5AA2EA346033.png) |
+
+**True negatives — confident LOW-PRAME calls.** Attention is diffuse
+and broadly distributed with no dominating hot-spot, or concentrates
+on dermal/stromal tissue rather than a tumor nest. Importantly, the
+model also learns to ignore out-of-focus or torn tissue regions (see
+the blurred lower half of `GN-A26C`, which receives near-zero
+attention). The TN signature is the *absence* of a focal nest, not
+the presence of a distinct low-PRAME morphology.
+
+| `TCGA-D3-A8GE` (prob=0.004, fold 1) | `TCGA-GN-A26C` (prob=0.010, fold 5) |
+|---|---|
+| ![TN A8GE](results/uni/heatmaps/TN_TCGA-D3-A8GE-06Z-00-DX1.757AE9F7-823E-4167-B12C-F6DA031B21D1.png) | ![TN A26C](results/uni/heatmaps/TN_TCGA-GN-A26C-01Z-00-DX1.E6395A6B-21CA-4994-9F01-738B915ADFB8.png) |
+
+**False positives — LOW-PRAME slides the model confidently calls
+HIGH.** The attention pattern is visually indistinguishable from a
+TP: focal bright clusters inside a dense tumor body. These are slides
+where PRAME mRNA is low but the morphology mimics a classical
+high-PRAME tumor. This is the dominant error mode and is consistent
+with the ~0.74 AUC ceiling — morphology alone cannot perfectly
+separate the two PRAME quartiles when the tumor architecture
+overlaps.
+
+| `TCGA-D3-A3CC` (prob=0.990, fold 3) | `TCGA-EB-A5UM` (prob=0.989, fold 5) |
+|---|---|
+| ![FP A3CC](results/uni/heatmaps/FP_TCGA-D3-A3CC-06Z-00-DX1.6C3A3EDF-F69F-4719-B4A7-DC32118051CB.png) | ![FP A5UM](results/uni/heatmaps/FP_TCGA-EB-A5UM-01Z-00-DX1.6F0E5CD6-FE4C-46F9-A095-59CF750A053A.png) |
+
+**False negatives — HIGH-PRAME slides the model confidently calls
+LOW.** Attention is pulled toward tissue-architectural artifacts —
+the margin of a central necrotic cavity in `D3-A3MO`, the edge of a
+tear in `EE-A3JA` — rather than onto the bulk tumor. The model is
+confident *because* no focal tumor-nest pattern is detected; the
+cellular PRAME-expressing regions exist but are drowned out by the
+edge/necrosis signal. This failure mode suggests a future gain from
+tissue-quality filtering or an explicit necrosis mask before MIL
+aggregation.
+
+| `TCGA-D3-A3MO` (prob=0.025, fold 4) | `TCGA-EE-A3JA` (prob=0.021, fold 3) |
+|---|---|
+| ![FN A3MO](results/uni/heatmaps/FN_TCGA-D3-A3MO-06Z-00-DX1.F375C5A1-723B-4F61-B1AB-6AF1B944A327.png) | ![FN A3JA](results/uni/heatmaps/FN_TCGA-EE-A3JA-06Z-00-DX1.616ADF60-1EBE-4082-97D8-25AFEF393429.png) |
+
+**Takeaways.** The heatmaps support the AUC numbers mechanistically:
+the model has learned a real morphological signal (focal dense tumor
+nest → HIGH PRAME) and it fires that signal on held-out tumors
+without leakage. The ceiling comes from two symmetric failure modes —
+(a) LOW-PRAME tumors with HIGH-PRAME morphology (FPs), and (b)
+HIGH-PRAME tumors whose morphology is masked by necrosis or tissue
+artifacts (FNs). Both are plausible targets for Component 2 to
+recover by conditioning on the *predicted* PRAME distribution rather
+than a hard threshold.
+
+---
 
 Per-fold CSVs, model weights, ROC curves, and training curves are in
 `results/uni/` and `results/conch/`. Regularization diagnostics are
-in `results/uni/ablation/` and `results/uni/compare/`. Attention
-heatmaps (when generated) live under `results/{model}/heatmaps/`.
+in `results/uni/ablation/` and `results/uni/compare/`. The full
+48-slide attention panel is in `results/{model}/heatmaps/`.
