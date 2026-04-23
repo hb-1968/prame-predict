@@ -112,8 +112,13 @@ python 04_train_mil.py --model conch         # Train attention MIL classifier (5
 
 # Option B: Train on Colab (GPU) — use notebooks/train_mil_colab.ipynb
 # Reads embeddings from Drive, saves models + results back to Drive
-python 05_generate_heatmaps.py               # Visualize attention on WSIs
-python 06_compare_models.py                  # Side-by-side evaluation
+
+# Generate attention heatmaps over re-downloaded WSIs (held-out fold per slide).
+# Default: 48-slide curated panel (top-12 per TP/TN/FP/FN by |logit|).
+# Recommend the Colab notebook (bandwidth to GDC is the reason to run remotely).
+python 05_generate_heatmaps.py                  # local run (slow — home internet bottleneck)
+python 05_generate_heatmaps.py --slide STEM     # single-slide render
+# notebooks/generate_heatmaps_colab.ipynb       # preferred path: ~5–8 min, CPU runtime, 0 compute units
 ```
 
 ## Compute Setup
@@ -121,7 +126,7 @@ python 06_compare_models.py                  # Side-by-side evaluation
 Development on a Windows laptop (CPU only). Heavy compute (tiling,
 feature extraction, MIL training) on Google Colab with a T4 GPU.
 
-Two Colab notebooks handle the GPU-dependent stages:
+Three Colab notebooks handle the bandwidth- and GPU-dependent stages:
 
 - **`notebooks/prame_predict.ipynb`** — Feature extraction pipeline:
   downloads WSIs from the GDC API, tiles them in-memory, extracts
@@ -134,6 +139,17 @@ Two Colab notebooks handle the GPU-dependent stages:
   Saves model weights, per-fold metrics (CSV/JSON), ROC curves, and
   training curves to Drive. Set `MODEL = "uni"` or `"conch"` to
   switch between feature sets.
+
+- **`notebooks/generate_heatmaps_colab.ipynb`** — Attention-heatmap
+  rendering: replays the 5-fold CV split (seed=42) to identify the
+  held-out fold per slide, re-downloads ~50 WSIs from GDC in parallel
+  (8 workers), computes per-patch attention with the held-out model,
+  and renders a 48-slide curated panel (top-12 per TP/TN/FP/FN by
+  `|logit|`) via a rasterized numpy canvas + single `imshow` overlay.
+  Device is **pinned to CPU** — the job is I/O-bound (GDC download +
+  matplotlib), so a GPU runtime provides no speedup. Running on Colab
+  CPU burns **0 compute units** while giving ~3–6× the home-internet
+  download bandwidth to GDC. Expected wall-clock: ~5–8 min.
 
 ### Colab Pipeline Optimizations
 
@@ -292,6 +308,29 @@ Component 3 routing gate.
 ![UNI ablation: per-regularizer effect](results/uni/ablation/ablation_comparison.png)
 ![UNI baseline vs. bundled regularization](results/uni/compare/compare_baseline_vs_reg.png)
 
+### Attention Heatmaps (qualitative validation)
+
+To confirm the MIL model attends to plausible morphology rather than
+background or artifacts, `05_generate_heatmaps.py` (and its Colab
+wrapper `notebooks/generate_heatmaps_colab.ipynb`) renders per-patch
+attention as a color overlay on each slide's thumbnail. For every
+slide, the attention comes from the **one fold where that slide was
+held out**, so no attention map is produced by a model that trained on
+its own slide.
+
+The default panel is 48 slides — top-12 per outcome class (TP / TN /
+FP / FN) ranked by `|logit|` on held-out predictions. This balances
+high-confidence correct calls (what the model locks onto when right)
+against high-confidence errors (where the model is confident but
+wrong — the most diagnostic failure cases). Each PNG is titled with
+slide ID, true label, predicted probability, outcome class, fold, and
+patch count, with a percentile-normalized colormap legend.
+
+Outputs land in `results/{model}/heatmaps/` (gitignored). Held-out
+predictions for all 200 slides are cached alongside as
+`oof_predictions.csv` for downstream analysis.
+
 Per-fold CSVs, model weights, ROC curves, and training curves are in
 `results/uni/` and `results/conch/`. Regularization diagnostics are
-in `results/uni/ablation/` and `results/uni/compare/`.
+in `results/uni/ablation/` and `results/uni/compare/`. Attention
+heatmaps (when generated) live under `results/{model}/heatmaps/`.
