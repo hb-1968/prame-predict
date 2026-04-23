@@ -106,19 +106,44 @@ python 02_tile_wsi.py --all             # Tile all WSIs into patches (.npy, max 
 python 03_extract_features.py --model uni --all
 python 03_extract_features.py --model conch --all
 
-# Option A: Train locally (CPU)
+# Option A: Train locally (CPU) — unregularized baseline
 python 04_train_mil.py --model uni           # Train attention MIL classifier (5-fold CV)
 python 04_train_mil.py --model conch         # Train attention MIL classifier (5-fold CV)
 
-# Option B: Train on Colab (GPU) — use notebooks/train_mil_colab.ipynb
+# Option B: Train locally (CPU) — regularized variant (04_train_mil_reg.py)
+# Production heuristic — full 5-fold CV with the bundled regularizers used for the reported results
+python 04_train_mil_reg.py --model uni --grad-clip 1.0 --label-smoothing 0.05 --entropy-lambda 1e-5
+python 04_train_mil_reg.py --model conch --grad-clip 1.0 --label-smoothing 0.05 --entropy-lambda 1e-5
+
+# Diagnostic modes (single-fold, fast) — land in results/{model}/ablation/ and results/{model}/compare/
+python 04_train_mil_reg.py --model uni --ablation --entropy-lambda 1e-3 --grad-clip 1.0 --label-smoothing 0.05
+python 04_train_mil_reg.py --model uni --compare --grad-clip 1.0 --label-smoothing 0.05
+
+# CPU-friendly smoke test: subsample slides to shorten wall-clock
+python 04_train_mil_reg.py --model uni --max-slides 40 --grad-clip 1.0 --label-smoothing 0.05
+
+# Option C: Train on Colab (GPU)
+# - notebooks/train_mil_colab.ipynb          — unregularized baseline
+# - notebooks/train_mil_reg_colab.ipynb      — regularized variant (mirrors 04_train_mil_reg.py)
 # Reads embeddings from Drive, saves models + results back to Drive
 
 # Generate attention heatmaps over re-downloaded WSIs (held-out fold per slide).
-# Default: 48-slide curated panel (top-12 per TP/TN/FP/FN by |logit|).
-# Recommend the Colab notebook (bandwidth to GDC is the reason to run remotely).
-python 05_generate_heatmaps.py                  # local run (slow — home internet bottleneck)
-python 05_generate_heatmaps.py --slide STEM     # single-slide render
-# notebooks/generate_heatmaps_colab.ipynb       # preferred path: ~5–8 min, CPU runtime, 0 compute units
+# Replays the 5-fold CV split (seed=42) so each slide's attention comes from the model that did not train on it.
+# WSIs are streamed from GDC and deleted after rendering (unless --keep-wsi).
+
+# Default: 8-figure curated panel (top-2 per TP/TN/FP/FN by |logit|) from UNI fold models
+python 05_generate_heatmaps.py                                    # --model uni, --n-per-class 2
+python 05_generate_heatmaps.py --model conch                      # same, CONCH fold models
+python 05_generate_heatmaps.py --model uni --n-per-class 12       # 48-slide panel (matches README figures)
+
+# Single-slide render (arbitrary slide, held-out fold auto-resolved)
+python 05_generate_heatmaps.py --model uni --slide TCGA-EB-A44O-06Z-00-DX1.788C33F2-3766-4792-B8DF-52C5F3E8AEDB
+
+# Keep WSIs around for re-rendering instead of deleting after each slide
+python 05_generate_heatmaps.py --model uni --keep-wsi
+
+# Preferred path: Colab CPU runtime — ~5–8 min, 0 compute units, ~3–6× GDC bandwidth vs. home internet
+# notebooks/generate_heatmaps_colab.ipynb
 ```
 
 ## Compute Setup
