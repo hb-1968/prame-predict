@@ -428,7 +428,7 @@ HIGH.** The attention pattern is visually indistinguishable from a
 TP: focal bright clusters inside a dense tumor body. These are slides
 where PRAME mRNA is low but the morphology mimics a classical
 high-PRAME tumor. This is the dominant error mode and is consistent
-with the ~0.74 AUC ceiling — morphology alone cannot perfectly
+with the ~0.74 AUC ceiling. Thus morphology alone cannot perfectly
 separate the two PRAME quartiles when the tumor architecture
 overlaps.
 
@@ -437,9 +437,9 @@ overlaps.
 | ![FP A3CC](results/uni/heatmaps/FP_TCGA-D3-A3CC-06Z-00-DX1.6C3A3EDF-F69F-4719-B4A7-DC32118051CB.png) | ![FP A5UM](results/uni/heatmaps/FP_TCGA-EB-A5UM-01Z-00-DX1.6F0E5CD6-FE4C-46F9-A095-59CF750A053A.png) |
 
 **False negatives — HIGH-PRAME slides the model confidently calls
-LOW.** Attention is pulled toward tissue-architectural artifacts —
+LOW.** Attention is pulled toward tissue-architectural artifacts:
 the margin of a central necrotic cavity in `D3-A3MO`, the edge of a
-tear in `EE-A3JA` — rather than onto the bulk tumor. The model is
+tear in `EE-A3JA`, rather than onto the bulk tumor. The model is
 confident *because* no focal tumor-nest pattern is detected; the
 cellular PRAME-expressing regions exist but are drowned out by the
 edge/necrosis signal. This failure mode suggests a future gain from
@@ -459,6 +459,8 @@ HIGH-PRAME tumors whose morphology is masked by necrosis or tissue
 artifacts (FNs). Both are plausible targets for Component 2 to
 recover by conditioning on the *predicted* PRAME distribution rather
 than a hard threshold.
+
+FOLLOWUP: (TBD)
 
 ---
 
