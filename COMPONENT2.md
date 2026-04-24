@@ -14,8 +14,11 @@ continue to update as acquisition completes and modeling lands.
 | Phase | Status |
 |---|---|
 | Design / acquisition plan | Finalized — **Plan E** (2026-04-23) |
-| `06_prepare_diagnostic_labels.py` | Implemented, smoke-tested (203-row baseline output) |
-| `07_download_component2.py` | Planned, not yet written |
+| Pipeline restructure (v2, 2026-04-23) | Done — 06/07/08 split by concern |
+| `06_predict_cobra_prame.py` | Implemented, plumbing smoke-tested |
+| `07_aggregate_hest_prame.py` | Implemented, blocked on HEST-1k HF access |
+| `08_build_diagnostic_manifest.py` | Implemented, dry-run verified (203 rows from SKCM sources) |
+| `09_train_component2.py` | Planned, not yet written |
 | External-source access | HEST-1k awaiting HuggingFace approval |
 | Tiling / extraction | `02_tile_wsi.py` + `03_extract_features.py` ready (per-slide, manifest-agnostic) |
 | Training / modeling | Not started |
@@ -130,147 +133,157 @@ the three-tier clinical framing — inflammatory dermatoses are
 diagnostically distinct from melanoma and teach the classifier a
 more general non-melanoma morphology signal.
 
-## 06 + 07 Pipeline
+## 06 / 07 / 08 Pipeline
 
-The Component-2 acquisition pipeline sits immediately after
-Component 1's pipeline. Scripts `06` and `07` produce the full
-diagnostic manifest; existing `02_tile_wsi.py` and
-`03_extract_features.py` then run unchanged on the new slides.
+Component-2 acquisition sits immediately after Component 1.
+Scripts split by concern:
 
-### `06_prepare_diagnostic_labels.py` (done)
+- **06** scores COBRA slides (which have no paired RNA) through
+  Component 1's UNI fold ensemble to produce predicted PRAME.
+- **07** aggregates HEST-1k Visium spot counts into per-slide
+  pseudobulk PRAME.
+- **08** composes everything (SKCM positives + SKCM tumor-free +
+  GTEx normals + COBRA from 06 + HEST from 07) into a single
+  `diagnostic_manifest.csv`.
+- **09** (planned) consumes 08's manifest and trains the
+  PRAME-conditioned classifier.
 
-Queries GDC for non-melanoma TCGA cohorts and merges them with
-the existing SKCM manifest (`data/expression/slide_manifest.csv`).
-Output: `data/expression/diagnostic_manifest.csv`.
+Existing `02_tile_wsi.py` + `03_extract_features.py` run
+unchanged against new negatives — both are per-slide and
+manifest-agnostic.
 
-**Invocation for Plan E**:
+### `06_predict_cobra_prame.py` (done)
+
+Ensembles Component 1's five UNI fold checkpoints
+(`results/uni/fold{1..5}_model.pt`) over COBRA embeddings. Every
+COBRA slide was never seen in Component-1 training, so all five
+folds apply — no held-out-fold replay needed (unlike
+`05_generate_heatmaps.py`). Per-slide output carries the mean,
+std, and median of the 5 fold probabilities plus a `confidence`
+score for Component 3's routing gate.
+
+**Invocation**:
 
 ```bash
-python 06_prepare_diagnostic_labels.py --skip-other-cancer --skip-pan-normal
-# Output: data/expression/diagnostic_manifest.csv (203 rows)
+# Predict on every COBRA embedding after 02+03 has run
+python 06_predict_cobra_prame.py --no-manifest-filter
+
+# Filter against the manifest after 08 has produced it once
+python 06_predict_cobra_prame.py \
+    --manifest data/expression/diagnostic_manifest.csv \
+    --source-group cobra_bcc
 ```
 
-**Skip rationale**: both skipped sources fail the
-skin-tissue-only hard filter.
+**Output**: `data/expression/cobra_prame_predictions.csv` with
+`file_id, file_name, prob_fold1..prob_fold5, prob_mean,
+prob_std, prob_median, pred_label, confidence, n_patches,
+prame_source, component1_model`.
 
-- `--skip-pan-normal` drops Solid-Tissue-Normal slides from
-  non-SKCM TCGA projects (kidney, pancreas, etc. — not skin).
-- `--skip-other-cancer` drops Primary-Tumor slides from
-  non-melanoma TCGA projects (BRCA, LUAD, COAD, PRAD, STAD —
-  not skin).
+Consumed by 08 via an `file_id` stem join. If 06 hasn't run,
+08's COBRA rows carry `prame_tpm=NaN` and
+`prame_source="cobra_missing"`.
 
-The 203-row output is the GDC-sourced baseline: 200 SKCM
-melanoma positives (re-queried to pick up `project_id` /
-`sample_type` / `experimental_strategy` fields that
-`slide_manifest.csv` doesn't carry) + 3 SKCM tumor-free
-negatives.
+### `07_aggregate_hest_prame.py` (done, gated)
 
-**Features**:
+Fetches the HEST-1k metadata CSV from HuggingFace, filters to
+non-melanoma skin (dermatitis, psoriasis, SCC, normal),
+downloads per-slide `.h5ad` Visium AnnData, sums raw counts
+across in-tissue spots, normalizes to per-million (pseudobulk
+CPM — labeled `prame_tpm_pseudobulk` for terminological
+consistency with TCGA/GTEx TPM), and extracts the PRAME row.
 
-- GDC POST requests with JSON body (avoids 414 URI-too-long on
-  large `file_id IN (...)` clauses, which is mandatory when
-  re-querying all 200 positives).
-- Diagnostic-slide → any-slide-image fallback for rare normal
-  cohorts that don't carry the Diagnostic-Slide flag in GDC
-  metadata. Applied to `skcm_normal` and `pan_normal` queries;
-  not applied to `other_cancer` (tumor slides reliably carry
-  the flag, so dropping Tissue-Slides there is a feature).
-- Disk-cached JSON responses at
-  `data/expression/.06_gdc_cache/<sha256>.json` (default 30-day
-  TTL via `--cache-days`). Re-runs after filter tweaks are
-  near-instant.
-- `--dry-run` prints counts, writes nothing.
-- `--neg-cap N` stratified sampling (unused under Plan E —
-  no caps needed with the narrow skin-only filter).
+**Invocation**:
 
-**Output schema** (13 columns):
+```bash
+python 07_aggregate_hest_prame.py --dry-run        # HF auth check + counts
+python 07_aggregate_hest_prame.py --limit 5        # 5 slides for testing
+python 07_aggregate_hest_prame.py                  # full non-melanoma skin set
+```
+
+**Output**: `data/expression/hest_prame_aggregate.csv` with
+`file_id, hest_cohort, disease, platform, n_in_tissue_spots,
+total_raw_counts, prame_raw_count, prame_tpm_pseudobulk`.
+
+**Blocked on HuggingFace access.** `MahmoodLab/hest` is gated;
+the script fails gracefully with a `GatedRepoError` and prints
+the access-request URL.
+
+**New deps**: `scanpy`, `anndata` — plus the already-installed
+`huggingface_hub`.
+
+Individual Visium skin studies outside HEST-1k (Ji 2020 cSCC,
+Yost 2019 BCC, Sorin 2023 BCC) are **out of scope** for 07 —
+deferred to a future `07b_aggregate_visium_external.py` or a
+later in-place extension once HEST's yield is known.
+
+### `08_build_diagnostic_manifest.py` (done)
+
+Composes five sources into the unified manifest at
+`data/expression/diagnostic_manifest.csv`:
+
+1. **SKCM positives (200)** — read from
+   `data/expression/slide_manifest.csv` with measured PRAME.
+2. **SKCM tumor-free (3)** — GDC mini-query (embedded in 08)
+   for the small paired-normal cohort; Diagnostic-Slide →
+   any-slide fallback since Solid-Tissue-Normal TCGA slides
+   often lack the Diagnostic flag.
+3. **GTEx normal skin (~200)** — direct download of
+   `GTEx_Analysis_v10_RNASeQCv2.4.2_gene_tpm.gct.gz`, lazy
+   parse for only the PRAME row, join with sample annotations
+   (`SMTSD`); stratified 100 sun-exposed + 100 not-sun-exposed
+   picked across the PRAME TPM distribution for widest spread.
+4. **COBRA BCC (~115)** — `boto3` unsigned listing of
+   `s3://cobra-pathology/`, heuristic BCC-subtype classifier
+   (rejects risky-cancer bucket and SCC keywords), stratified
+   subtype pick; joins with 06's predictions on `file_id`
+   stem to fill PRAME where available.
+5. **HEST/Visium (~85)** — reads 07's aggregate CSV; rows
+   carry `prame_source="hest_pseudobulk"` with the CPM value.
+
+**Output schema** (16 columns):
 
 ```
 file_id, file_name, file_size_gb, case_id, submitter_id,
 project_id, sample_type, experimental_strategy,
 melanoma_label, source_group,
-prame_tpm, prame_group, prame_label
+prame_tpm, prame_group, prame_label,
+has_prame, prame_source, download_url
 ```
 
-Positive rows carry the PRAME columns from the existing
-Component-1 manifest. The 3 SKCM-normal rows have NaN PRAME
-columns (no PRAME measured on tumor-free TCGA tissue). Every
-row has `melanoma_label ∈ {0, 1}`.
+`prame_source` enum distinguishes `tcga` / `tcga_unmeasured` /
+`gtex` / `hest_pseudobulk` / `component1_predicted` /
+`cobra_missing`. Plan E decision: `prame_tpm` stays in
+source-native units; harmonization across sources is 09's job.
 
-### `07_download_component2.py` (planned)
+**Invocation**:
 
-Extends 06's manifest with the 400 Plan E negatives from the
-three external sources. Writes to a new
-`data/expression/diagnostic_manifest_full.csv` rather than
-overwriting 06's output — keeps 06 and 07 composable and
-prevents a re-run of 06 from silently discarding 07's rows.
+```bash
+# Full build (requires 06 + 07 outputs for the predicted / pseudobulk slots)
+python 08_build_diagnostic_manifest.py
 
-**Per-source flow**:
+# Partial build — SKCM-only, fast, useful for plumbing checks
+python 08_build_diagnostic_manifest.py \
+    --skip-gtex --skip-cobra --skip-hest --dry-run
+```
 
-1. **GTEx ingest (200 rows)**
-   - Download `GTEx_Analysis_v10_RNASeQCv...gene_tpm.gct.gz`
-     from the GTEx Portal Downloads page (open access, no DUA).
-   - Extract the PRAME row (`ENSG00000185686`) across all skin
-     samples.
-   - Join per-sample `SAMPID` to its histology SVS URL via the
-     GTEx Histology Viewer (NCI Biospecimen Research Database).
-   - Stratified sampling: 100 from "Skin - Sun Exposed (Lower
-     leg)" + 100 from "Skin - Not Sun Exposed (Suprapubic)",
-     picked for widest PRAME TPM distribution (covers both
-     clinical extremes).
-   - Schema: `melanoma_label=0`, `source_group="gtex_normal"`,
-     `prame_tpm=<measured TPM>`, `prame_source="gtex"`,
-     `has_prame=True`.
+Graceful skips: if 06 or 07 hasn't produced its output, 08 ships
+the manifest with those rows marked `cobra_missing` /
+`hest_missing` and prints a warning with the script to run.
 
-2. **COBRA ingest (~115 rows)**
-   - `aws s3 ls --no-sign-request s3://cobra-pathology/` to
-     inventory the bucket.
-   - Enumerate BCC subtypes (Ia nodular, Ib superficial, II
-     medium, III high) and select a stratified pick.
-   - **Avoid the risky-cancer bucket** — it lumps melanoma with
-     SCC and Merkel; melanoma contamination into the negatives
-     is unacceptable.
-   - Schema: `melanoma_label=0`, `source_group="cobra_bcc"`,
-     `prame_tpm=NaN`, `prame_source="cobra_missing"`,
-     `has_prame=False`.
+**New dep**: `boto3` for the COBRA S3 inventory. Not required if
+you pass `--skip-cobra`.
 
-3. **HEST-1k + individual Visium (~85 rows)**
-   - Download HEST-1k metadata CSV from HuggingFace
-     (`MahmoodLab/hest`, gated — see Open Risks). Filter to
-     `organ=skin`, excluding melanoma cohorts.
-   - Enumerate published Visium skin studies **not already in
-     HEST-1k**: Ji et al. 2020 (cSCC), Yost et al. 2019 (BCC),
-     Sorin et al. 2023 (BCC niche), etc.
-   - For each slide: aggregate in-tissue spot raw counts →
-     sum-normalize to TPM → slide-level pseudobulk PRAME.
-   - Schema: `melanoma_label=0`, `source_group="hest_visium"`,
-     `prame_tpm=<pseudobulk TPM>`,
-     `prame_source="hest_pseudobulk"`, `has_prame=True`.
+### Cross-source confounders (flagged, not fixed)
 
-**New schema additions on top of 06**:
-
-- `has_prame` (bool) — derivable from `prame_tpm.notna()` but
-  explicit makes the downstream classifier's missing-handling
-  logic clearer.
-- `prame_source` (str enum) — one of `tcga`, `gtex`,
-  `hest_pseudobulk`, `cobra_missing`. Flags pipeline provenance
-  so cross-source confounders are explicit at training time.
-
-**Cross-source confounders** that 07 **flags but does not fix**:
-
-- Three scanners — Aperio (TCGA), GTEx Biospecimen Core, and
-  per-Visium-study scanners.
-- Three RNA-Seq pipelines — STAR+RSEM (TCGA), GTEx pipeline
-  (GTEx), and per-study pipelines (HEST/Visium).
-- PRAME TPMs are not directly comparable across sources
-  without re-processing all raw FASTQs through a single unified
-  pipeline. That's a major engineering effort; whether to invest
-  in it is deferred to the Component-2 modeling phase.
-
-**Reuse**: the existing `02_tile_wsi.py` and
-`03_extract_features.py` run unchanged against the new
-negatives — both are per-slide and manifest-agnostic, and the
-`if .h5 exists: skip` pattern makes re-runs safe.
+- Three scanners: Aperio (TCGA), GTEx Biospecimen Core, and
+  per-Visium-study (HEST cohorts).
+- Three RNA pipelines: STAR+RSEM (TCGA), GTEx's own pipeline,
+  and per-study pipelines (HEST/Visium pseudobulk ≠ proper
+  gene-length-corrected TPM).
+- PRAME values are not cross-comparable without re-processing
+  all raw FASTQs through one unified pipeline. Deferred to 09's
+  modeling decision (per-source normalization layer, quantile
+  harmonization, or per-source covariate).
 
 ### Disk + download budget (rough)
 
@@ -320,22 +333,26 @@ Same per-slide download/tile/extract/delete pattern as Component
 1. Request HEST-1k access on HuggingFace
    (https://huggingface.co/datasets/MahmoodLab/hest). Same
    MahmoodLab access process as UNI and CONCH.
-2. Verify exact HEST-1k skin slide count by querying the
-   metadata CSV (short Python + HF-hub script — not yet run,
-   gated on step 1).
-3. Write `07_download_component2.py` — the Component-2
-   counterpart to `01_download_data.py`, pulling from three
-   external sources with per-source PRAME-label handling.
-4. Run `07_download_component2.py` →
-   `data/expression/diagnostic_manifest_full.csv` (~603 rows).
-5. Re-use the existing `02_tile_wsi.py` +
-   `03_extract_features.py` pipeline on the new negatives.
-   Pipeline mode recommended — same ~300 MB temp-disk-per-slide
-   budget as Component 1.
-6. Write `08_train_component2.py` — Component-2 training
+2. Install the two new deps (`pip install boto3 scanpy
+   anndata`). `boto3` unlocks 08's COBRA ingest; `scanpy` +
+   `anndata` unlock 07's HEST pseudobulk.
+3. Run `notebooks/cobra_predict_colab.ipynb` on a T4/L4 GPU
+   Colab runtime — bundles the S3 download, 20x tiling (via
+   `02_tile_wsi.py` in in-memory mode), UNI feature
+   extraction, and the 5-fold PRAME ensemble into a single
+   workflow. Produces both `embeddings/uni_cobra/*.h5` and
+   `data/expression/cobra_prame_predictions.csv` on Drive.
+   Reason to run on Colab instead of the laptop: GPU + S3
+   bandwidth, not convenience.
+4. Run `07_aggregate_hest_prame.py` once HEST access is
+   granted — will download the `.h5ad` files on demand and
+   cache via HF hub. Local CPU is fine (no GPU needed).
+5. Run `08_build_diagnostic_manifest.py` to produce
+   `data/expression/diagnostic_manifest.csv` (~600 rows).
+6. Write `09_train_component2.py` — Component-2 training
    classifier. Must decide on NaN-PRAME handling (Open Risk 3)
-   and cross-source normalization (Open Risk 4) before the
-   first production run.
+   and cross-source PRAME normalization (Open Risk 4) before
+   the first production run.
 
 ## Decision History (abbreviated)
 

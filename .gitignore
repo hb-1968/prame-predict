@@ -3,6 +3,9 @@ data/wsi/
 data/tiles/
 embeddings/
 
+# Script-local caches (GDC / GTEx / HF JSON+file caches)
+data/expression/.*_cache/
+
 # Local research notes (not tracked)
 docs/
 

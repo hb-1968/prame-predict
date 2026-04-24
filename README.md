@@ -148,6 +148,27 @@ python 05_generate_heatmaps.py --model uni --keep-wsi
 
 # Preferred path: Colab CPU runtime — ~5–8 min, 0 compute units, ~3–6× GDC bandwidth vs. home internet
 # notebooks/generate_heatmaps_colab.ipynb
+
+# ----------------------------------------------------------------------
+# Component 2 pipeline (melanoma vs. not-melanoma, PRAME-conditioned).
+# See COMPONENT2.md for the full acquisition plan (Plan E) and rationale.
+
+# 06: Run Component 1's UNI 5-fold ensemble over COBRA BCC embeddings.
+# Writes data/expression/cobra_prame_predictions.csv.
+python 06_predict_cobra_prame.py --no-manifest-filter
+
+# 07: Pseudobulk HEST-1k Visium spots into per-slide PRAME TPM.
+# Requires HuggingFace access to MahmoodLab/hest (gated).
+python 07_aggregate_hest_prame.py
+
+# 08: Compose everything (SKCM positives + SKCM tumor-free + GTEx
+# normals + COBRA predictions from 06 + HEST aggregate from 07)
+# into data/expression/diagnostic_manifest.csv.
+python 08_build_diagnostic_manifest.py
+
+# Preferred path for COBRA: Colab GPU runtime via
+# notebooks/cobra_predict_colab.ipynb (bundles S3 download, tile,
+# extract, and 06's prediction stage into one workflow).
 ```
 
 ## Compute Setup
@@ -179,6 +200,22 @@ Three Colab notebooks handle the bandwidth- and GPU-dependent stages:
   matplotlib), so a GPU runtime provides no speedup. Running on Colab
   CPU burns **0 compute units** while giving ~3–6× the home-internet
   download bandwidth to GDC. Expected wall-clock: ~5–8 min.
+
+- **`notebooks/cobra_predict_colab.ipynb`**: Component 2 COBRA
+  workflow. Lists `s3://cobra-pathology/` (unsigned boto3),
+  stratified-picks BCC subtypes (rejecting the risky-cancer and SCC
+  buckets to avoid melanoma and SCC contamination), then per slide
+  downloads the WSI from S3, tiles in-memory at 20x via
+  `02_tile_wsi.py`, extracts UNI features, saves the `.h5` to Drive,
+  and deletes the local WSI. After every slide is embedded, loads
+  the 5 Component-1 UNI fold checkpoints from Drive and runs the
+  ensemble via `06_predict_cobra_prame.py` helpers to write
+  `cobra_prame_predictions.csv` to Drive (which feeds
+  `08_build_diagnostic_manifest.py --cobra-predictions`). UNI only
+  (Component 1 showed CONCH near chance on PRAME). Resumable:
+  re-running skips any slide with an existing `.h5` on Drive.
+  Rebuildable from `scripts/build_cobra_colab_notebook.py` rather
+  than editing the `.ipynb` JSON by hand.
 
 ### Colab Pipeline Optimizations
 
