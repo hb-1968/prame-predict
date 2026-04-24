@@ -33,6 +33,10 @@ Train a diagnostic model that takes H&E features AND PRAME expression
 PRAME becomes an additional learned parameter that the model weighs
 alongside morphological features.
 
+See **[COMPONENT2.md](COMPONENT2.md)** for the current state of
+Component 2 development — acquisition plan, 06/07 pipeline, and
+decision history.
+
 **Component 3 — Routing Logic (future)**
 - If predicted PRAME is reliably extreme → route to PRAME-conditioned
   classifier (Component 2)
