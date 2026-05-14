@@ -27,11 +27,15 @@ as a labeled subset for ground-truth evaluation — these represent cases
 where PRAME status would be clinically actionable. The model outputs a
 predicted PRAME level and a confidence score.
 
-**Component 2 — PRAME-Conditioned Melanoma Classifier (future)**
-Train a diagnostic model that takes H&E features AND PRAME expression
-(real or predicted) as inputs to classify melanoma vs. not-melanoma.
-PRAME becomes an additional learned parameter that the model weighs
-alongside morphological features.
+**Component 2 — PRAME-Conditioned Melanoma Classifier (implemented, training pending)**
+Train a multimodal MIL classifier where Component 1's H&E patch
+features form the bag and the per-slide PRAME value (measured or
+predicted) is projected into the same feature space and appended as
+one extra instance. Attention pooling co-attends patches and the
+PRAME instance, so morphology and PRAME contribute at the same level;
+the model can still disagree with PRAME when the visual evidence
+demands. Statistically significant PRAME usually indicates melanoma
+but not always, so visual scoring stays load-bearing.
 
 See **[COMPONENT2.md](COMPONENT2.md)** for the current state of
 Component 2 development — acquisition plan, 06/07 pipeline, and
@@ -166,9 +170,25 @@ python 07_aggregate_hest_prame.py
 # into data/expression/diagnostic_manifest.csv.
 python 08_build_diagnostic_manifest.py
 
+# 09: Train the Component-2 PRAME-conditioned diagnostic MIL.
+# --compare runs the full 5-fold CV across all three ablation
+# modes (full / no_predicted / no_prame) with the same
+# deterministic patient-level split. Outputs per-mode CV
+# artifacts plus a bundled comparison plot and JSON under
+# results/{model}/component2/.
+python 09_train_component2.py --compare
+
+# Equivalent split (run a single mode at a time):
+python 09_train_component2.py --mode full
+python 09_train_component2.py --mode no_predicted
+python 09_train_component2.py --mode no_prame
+
 # Preferred path for COBRA: Colab GPU runtime via
 # notebooks/cobra_predict_colab.ipynb (bundles S3 download, tile,
 # extract, and 06's prediction stage into one workflow).
+# Preferred path for HEST: notebooks/hest_aggregate_colab.ipynb
+# (CPU runtime; downloads each .h5ad, pseudobulks PRAME, deletes
+# the blob, writes the aggregate CSV incrementally for resumability).
 ```
 
 ## Compute Setup
@@ -216,6 +236,21 @@ Three Colab notebooks handle the bandwidth- and GPU-dependent stages:
   re-running skips any slide with an existing `.h5` on Drive.
   Rebuildable from `scripts/build_cobra_colab_notebook.py` rather
   than editing the `.ipynb` JSON by hand.
+
+- **`notebooks/hest_aggregate_colab.ipynb`**: Component 2 HEST
+  pseudobulk workflow. Fetches the HEST-1k metadata CSV from
+  HuggingFace (`MahmoodLab/hest`, access approved 2026-05-14),
+  filters to non-melanoma skin via `07_aggregate_hest_prame.py`'s
+  helpers (`_download_metadata`, `_filter_skin_nonmelanoma`,
+  `_pseudobulk_prame`) loaded by `SourceFileLoader`, then per
+  slide downloads the `.h5ad`, restricts to in-tissue spots, sums
+  raw counts, normalizes to per-million (pseudobulk CPM), extracts
+  the PRAME row, writes the incremental CSV to Drive, and clears
+  the slide cache so each `.h5ad` blob is freed before the next
+  slide. CPU runtime (pseudobulk is sparse-matrix sum + normalize;
+  no GPU needed), resumable on reconnect. Output goes directly to
+  the path `08_build_diagnostic_manifest.py` reads by default.
+  Rebuildable from `scripts/build_hest_aggregate_colab_notebook.py`.
 
 ### Colab Pipeline Optimizations
 

@@ -16,10 +16,10 @@ continue to update as acquisition completes and modeling lands.
 | Design / acquisition plan | Finalized — **Plan E** (2026-04-23) |
 | Pipeline restructure (v2, 2026-04-23) | Done — 06/07/08 split by concern |
 | `06_predict_cobra_prame.py` | Implemented, plumbing smoke-tested |
-| `07_aggregate_hest_prame.py` | Implemented, blocked on HEST-1k HF access |
+| `07_aggregate_hest_prame.py` | Implemented, HF access approved 2026-05-14, ready to run |
 | `08_build_diagnostic_manifest.py` | Implemented, dry-run verified (203 rows from SKCM sources) |
-| `09_train_component2.py` | Planned, not yet written |
-| External-source access | HEST-1k awaiting HuggingFace approval |
+| `09_train_component2.py` | Implemented with `full` / `no_predicted` / `no_prame` modes and `--compare` driver; not yet trained |
+| External-source access | HEST-1k approved 2026-05-14 |
 | Tiling / extraction | `02_tile_wsi.py` + `03_extract_features.py` ready (per-slide, manifest-agnostic) |
 | Training / modeling | Not started |
 | Results writeup (figures, tables) | Deferred — applies once Component 2 produces training artifacts |
@@ -55,6 +55,68 @@ threshold. When PRAME is reliably extreme (top / bottom
 quartile), the classifier weighs it alongside morphology; when
 PRAME is indeterminate, Component 3's routing logic falls back
 to standard CONCH/UNI classification without PRAME conditioning.
+
+## Architecture
+
+Component 2 is a multimodal MIL classifier. Per slide,
+Component 1's H&E backbone produces patch features that form
+the visual portion of the bag. The per-slide PRAME value
+(measured for SKCM and GTEx, pseudobulked for HEST, predicted
+by Component 1 for COBRA) is projected to the patch feature
+dimension and appended to the bag as a single extra instance.
+Gated-attention pooling then operates jointly over the patch
+instances and the PRAME instance, so morphology and PRAME are
+co-attended at the same level. This deliberately leaves room
+for the model to disagree with PRAME when the visual signal
+demands it: statistically significant PRAME usually indicates
+melanoma, but not always, so morphology must remain
+load-bearing.
+
+NaN-PRAME rows (the ~115 COBRA slides without measured or
+pseudobulkable RNA) are handled by training-time gating: if
+`has_prame=False`, the PRAME instance is masked out of the bag
+and the slide is treated as visual-only. This keeps the COBRA
+negatives in the training distribution without forcing a
+zero-imputation that the attention would learn to ignore.
+
+### Ablation modes
+
+`09_train_component2.py` exposes three input variants via
+`--mode` so the contribution of PRAME can be measured directly
+against visual-only baselines:
+
+- **`full`** (default) — all PRAME sources flow: SKCM and GTEx
+  measured RNA-Seq, HEST pseudobulked Visium, and COBRA
+  Component-1-predicted PRAME. The PRAME instance is appended
+  whenever `has_prame=True`.
+- **`no_predicted`** — same architecture as `full`, but rows
+  with `prame_source=="component1_predicted"` (COBRA) are
+  treated as `has_prame=False`. Isolates the contribution of
+  Component-1's predicted PRAME from measured/pseudobulked PRAME.
+- **`no_prame`** — the PRAME projection branch is not built;
+  the model is architecturally identical to a vanilla
+  `AttentionMIL`. Pure visual MIL baseline, the reference
+  point for "PRAME adds nothing." Parameter count matches
+  `AttentionMIL` exactly (verified at script load).
+
+`--compare` runs all three modes through the full N-fold CV
+(controlled by `--folds`, default 5) with the same
+deterministic patient-level split (seed=42) and emits the
+bundled comparison artifacts on top of the per-mode CV outputs
+that `run_full_cv` already writes:
+
+- `results/{model}/component2/compare/compare_variants.png` -
+  a 2x2 grid: val AUC per fold (light traces) plus mean line
+  per mode, pooled ROC across all folds per mode, per-fold val
+  AUC grouped bar chart, and aggregate metrics with std error
+  bars.
+- `results/{model}/component2/compare/comparison.json` - per
+  mode: `val_auc_per_fold`, `val_acc_per_fold`,
+  `sensitivity_per_fold`, `specificity_per_fold`, plus
+  `mean_*` / `std_*` aggregates and `pooled_auc`.
+
+For a quick fold-1 sanity check the same flag can be combined
+with `--folds 1`.
 
 ## Training Cohort Design
 
@@ -183,7 +245,7 @@ Consumed by 08 via an `file_id` stem join. If 06 hasn't run,
 08's COBRA rows carry `prame_tpm=NaN` and
 `prame_source="cobra_missing"`.
 
-### `07_aggregate_hest_prame.py` (done, gated)
+### `07_aggregate_hest_prame.py` (done; HF access approved 2026-05-14)
 
 Fetches the HEST-1k metadata CSV from HuggingFace, filters to
 non-melanoma skin (dermatitis, psoriasis, SCC, normal),
@@ -204,9 +266,12 @@ python 07_aggregate_hest_prame.py                  # full non-melanoma skin set
 `file_id, hest_cohort, disease, platform, n_in_tissue_spots,
 total_raw_counts, prame_raw_count, prame_tpm_pseudobulk`.
 
-**Blocked on HuggingFace access.** `MahmoodLab/hest` is gated;
-the script fails gracefully with a `GatedRepoError` and prints
-the access-request URL.
+**HEST HF access approved 2026-05-14.** Run
+`notebooks/hest_aggregate_colab.ipynb` (CPU runtime,
+download-bound) or `python 07_aggregate_hest_prame.py` to
+populate `data/expression/hest_prame_aggregate.csv`. The
+script still fails gracefully on `GatedRepoError` for any
+future user without approval.
 
 **New deps**: `scanpy`, `anndata` — plus the already-installed
 `huggingface_hub`.
@@ -298,29 +363,24 @@ Same per-slide download/tile/extract/delete pattern as Component
 
 ## Open Risks
 
-1. **HEST-1k access gating.** The HuggingFace dataset
-   (`MahmoodLab/hest`) returns `GatedRepoError` without approval.
-   MahmoodLab already granted UNI/CONCH access to this project,
-   so turnaround should be fast, but 07 is blocked on this
-   approval landing before the HEST slot can be inventoried
-   precisely.
-2. **GTEx post-mortem morphology caveat.** 200 of the 400
+1. **GTEx post-mortem morphology caveat.** 200 of the 400
    negatives come from autopsy tissue — possible autolysis /
    freezing artifacts distinct from biopsy morphology. A
    pre-training sanity check (run a handful of GTEx SVSs through
    the UNI + CONCH feature extractors, spot-check embeddings)
    is warranted before committing full training runs.
-3. **COBRA NaN-PRAME handling.** ~115 rows will have
-   `prame_tpm = NaN`. The Component-2 training code must either
-   (a) gate on `has_prame` and zero-out the PRAME branch, (b)
-   route NaN rows through Component 1's prediction at training
-   time (pseudo-labeling), or (c) drop them entirely. Deferred
-   to the modeling design decision.
-4. **Cross-source PRAME comparability.** Three RNA pipelines
+2. **COBRA NaN-PRAME handling.** ~115 rows will have
+   `prame_tpm = NaN`. Component 2's training-time gating (see
+   the Architecture section above) masks the PRAME instance out
+   of the bag when `has_prame=False`, treating the slide as
+   visual-only. Empirical validation of this approach versus
+   pseudo-labeling via Component 1 is deferred to the modeling
+   stage.
+3. **Cross-source PRAME comparability.** Three RNA pipelines
    produce three TPM distributions. Either accept as a known
    confounder in modeling or re-process all raw FASTQs through
    a single unified pipeline (large effort).
-5. **HEST skin yield uncertainty.** Paper reports 59 total skin
+4. **HEST skin yield uncertainty.** Paper reports 59 total skin
    samples, ~54 non-melanoma (mostly inflammatory, a few SCC).
    Published Visium skin studies not in HEST add an estimated
    ~20–40 more. Realistic yield: ~75–95. If final yield falls
@@ -328,31 +388,46 @@ Same per-slide download/tile/extract/delete pattern as Component
    COBRA — preserves the biopsy axis, widens the NaN-PRAME
    bucket.
 
+## Resolved Risks
+
+1. **HEST-1k access gating (resolved 2026-05-14).** MahmoodLab
+   granted access to `MahmoodLab/hest`. Component 2's HEST slot
+   is no longer blocked; run 07 to populate
+   `hest_prame_aggregate.csv` and confirm actual non-melanoma
+   skin yield versus the ~85-slide planning estimate.
+
 ## Acquisition Next Steps
 
-1. Request HEST-1k access on HuggingFace
-   (https://huggingface.co/datasets/MahmoodLab/hest). Same
-   MahmoodLab access process as UNI and CONCH.
-2. Install the two new deps (`pip install boto3 scanpy
+1. Install the two new deps (`pip install boto3 scanpy
    anndata`). `boto3` unlocks 08's COBRA ingest; `scanpy` +
    `anndata` unlock 07's HEST pseudobulk.
-3. Run `notebooks/cobra_predict_colab.ipynb` on a T4/L4 GPU
+2. Run `notebooks/cobra_predict_colab.ipynb` on a T4/L4 GPU
    Colab runtime — bundles the S3 download, 20x tiling (via
    `02_tile_wsi.py` in in-memory mode), UNI feature
    extraction, and the 5-fold PRAME ensemble into a single
    workflow. Produces both `embeddings/uni_cobra/*.h5` and
    `data/expression/cobra_prame_predictions.csv` on Drive.
    Reason to run on Colab instead of the laptop: GPU + S3
-   bandwidth, not convenience.
-4. Run `07_aggregate_hest_prame.py` once HEST access is
-   granted — will download the `.h5ad` files on demand and
-   cache via HF hub. Local CPU is fine (no GPU needed).
-5. Run `08_build_diagnostic_manifest.py` to produce
+   bandwidth, not convenience. **Done.**
+3. Run `notebooks/hest_aggregate_colab.ipynb` (CPU runtime;
+   downloads each `.h5ad` from HF, pseudobulks PRAME, deletes
+   the blob, writes `data/expression/hest_prame_aggregate.csv`
+   incrementally for resumability). Equivalent local
+   invocation: `python 07_aggregate_hest_prame.py`.
+4. Run `08_build_diagnostic_manifest.py` to produce
    `data/expression/diagnostic_manifest.csv` (~600 rows).
-6. Write `09_train_component2.py` — Component-2 training
-   classifier. Must decide on NaN-PRAME handling (Open Risk 3)
-   and cross-source PRAME normalization (Open Risk 4) before
-   the first production run.
+5. Run `09_train_component2.py --compare` to train all three
+   ablation modes through the full 5-fold CV with the same
+   deterministic patient-level split. This populates per-mode
+   artifacts (`cv_results_<mode>.csv`, `summary_<mode>.json`,
+   `fold{1..5}_<mode>_model.pt`, training and ROC plots) under
+   `results/{model}/component2/`, plus the bundled
+   `compare/comparison.json` and `compare/compare_variants.png`.
+   For a fast single-fold sanity check use
+   `--compare --folds 1`. Cross-source PRAME normalization
+   (Open Risk 3) defaults to `log1p`; revisit with
+   `--prame-norm zscore_per_source` once the first-pass
+   results are in.
 
 ## Decision History (abbreviated)
 
