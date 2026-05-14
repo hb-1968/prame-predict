@@ -312,6 +312,7 @@ def ingest_gtex(n_per_tissue: int, cache_dir: Path, cache_days: int) -> pd.DataF
     for _, r in picked.iterrows():
         sampid = r["SAMPID"]
         donor = "-".join(sampid.split("-")[:2])
+        tissue_sample_id = "-".join(sampid.split("-")[:3])
         rows.append({
             "file_id": sampid,
             "file_name": f"{sampid}.svs",
@@ -328,7 +329,7 @@ def ingest_gtex(n_per_tissue: int, cache_dir: Path, cache_days: int) -> pd.DataF
             "prame_label": np.nan,
             "has_prame": True,
             "prame_source": "gtex",
-            "download_url": GTEX_HISTOLOGY_URL.format(sampid=sampid),
+            "download_url": GTEX_HISTOLOGY_URL.format(sampid=tissue_sample_id),
         })
     df = pd.DataFrame(rows, columns=MANIFEST_SCHEMA)
     print(f"  -> {len(df)} GTEx rows")

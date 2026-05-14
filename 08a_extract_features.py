@@ -130,7 +130,14 @@ def hest_downloader(state, row, local_path):
 
 
 def brd_downloader(state, row, local_path):
-    """Stream a GTEx WSI from the BRD URL in the manifest."""
+    """Stream a GTEx WSI from the BRD URL in the manifest.
+
+    Validates the response is actually a TIFF/SVS (Content-Type, min size,
+    magic bytes) before renaming the .tmp to the final path. BRD returns
+    HTTP 200 with an HTML page when the sample ID is wrong or the asset
+    is unavailable, so without these checks failures look identical to
+    "OpenSlideUnsupportedFormatError" downstream.
+    """
     import requests
 
     url = row.get("download_url")
@@ -143,14 +150,34 @@ def brd_downloader(state, row, local_path):
     chunk = state["chunk_bytes"]
     if local_path.exists():
         return local_path
+    tmp = local_path.with_suffix(local_path.suffix + ".tmp")
     with session.get(url, stream=True, timeout=timeout) as r:
         r.raise_for_status()
-        tmp = local_path.with_suffix(local_path.suffix + ".tmp")
+        content_type = r.headers.get("Content-Type", "") or ""
+        status_code = r.status_code
         with open(tmp, "wb") as fh:
             for piece in r.iter_content(chunk_size=chunk):
                 if piece:
                     fh.write(piece)
-        tmp.rename(local_path)
+    size = tmp.stat().st_size
+    with open(tmp, "rb") as fh:
+        head = fh.read(16)
+    magic = head[:4]
+    bad_type = content_type.lower().startswith("text/")
+    too_small = size < 1_000_000
+    bad_magic = magic not in (b"II*\x00", b"MM\x00*")
+    if bad_type or too_small or bad_magic:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise RuntimeError(
+            f"BRD returned a non-TIFF payload for {row.get('file_id')!r}. "
+            f"url={url}  http={status_code}  content-type={content_type!r}  "
+            f"size={size}B  first16={head.hex()}  "
+            f"(bad_type={bad_type} too_small={too_small} bad_magic={bad_magic})"
+        )
+    tmp.rename(local_path)
     return local_path
 
 
