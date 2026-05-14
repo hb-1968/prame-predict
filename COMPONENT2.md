@@ -18,7 +18,8 @@ continue to update as acquisition completes and modeling lands.
 | `06_predict_cobra_prame.py` | Implemented, plumbing smoke-tested |
 | `07_aggregate_hest_prame.py` | Implemented, HF access approved 2026-05-14, ready to run |
 | `08_build_diagnostic_manifest.py` | Implemented, dry-run verified (203 rows from SKCM sources) |
-| `09_train_component2.py` | Implemented with `full` / `no_predicted` / `no_prame` modes and `--compare` driver; not yet trained |
+| `09_tune_component2.py` | Implemented; Optuna TPE Bayesian hyperparameter search on a stratified ~200-slide subsample with 10-fold CV; not yet run |
+| `10_train_component2.py` | Implemented (renamed from 09) with `full` / `no_predicted` / `no_prame` modes, `--compare` driver, regularizer wiring, and `--config best_config.json` consumption; not yet trained |
 | External-source access | HEST-1k approved 2026-05-14 |
 | Tiling / extraction | `02_tile_wsi.py` + `03_extract_features.py` ready (per-slide, manifest-agnostic) |
 | Training / modeling | Not started |
@@ -81,7 +82,7 @@ zero-imputation that the attention would learn to ignore.
 
 ### Ablation modes
 
-`09_train_component2.py` exposes three input variants via
+`10_train_component2.py` exposes three input variants via
 `--mode` so the contribution of PRAME can be measured directly
 against visual-only baselines:
 
@@ -416,18 +417,37 @@ Same per-slide download/tile/extract/delete pattern as Component
    invocation: `python 07_aggregate_hest_prame.py`.
 4. Run `08_build_diagnostic_manifest.py` to produce
    `data/expression/diagnostic_manifest.csv` (~600 rows).
-5. Run `09_train_component2.py --compare` to train all three
-   ablation modes through the full 5-fold CV with the same
-   deterministic patient-level split. This populates per-mode
-   artifacts (`cv_results_<mode>.csv`, `summary_<mode>.json`,
-   `fold{1..5}_<mode>_model.pt`, training and ROC plots) under
-   `results/{model}/component2/`, plus the bundled
-   `compare/comparison.json` and `compare/compare_variants.png`.
-   For a fast single-fold sanity check use
-   `--compare --folds 1`. Cross-source PRAME normalization
-   (Open Risk 3) defaults to `log1p`; revisit with
-   `--prame-norm zscore_per_source` once the first-pass
-   results are in.
+5a. Run `09_tune_component2.py --model uni --trials 30` to do a
+    Bayesian (Optuna TPE) hyperparameter search. 10-fold
+    StratifiedGroupKFold patient-level CV on a stratified random
+    ~200-slide subsample drawn across all source_groups. Search
+    space spans `lr`, `weight_decay`, `dropout`, `hidden_dim`,
+    `attn_dim`, `patience`, `grad_clip`, `label_smoothing`,
+    `entropy_lambda`, and `prame_norm`. Locked to `mode="full"`
+    (the production target); the winning config is reused for
+    `no_predicted` and `no_prame` during the production run
+    (tuning per mode would fit each mode's noise floor and stop
+    measuring the PRAME signal contribution). Outputs under
+    `results/{model}/component2_tune/`: `trials.csv`,
+    `best_config.json`, `tune_dashboard.png`, `subsample.csv`.
+    On Colab (the expected production path), enable
+    `--vram-cache --amp --n-jobs N` to preload the subsample to
+    GPU memory and run trials concurrently (see
+    `notebooks/tune_component2_colab.ipynb` for the auto-tuned
+    invocation per GPU tier).
+5b. Run `10_train_component2.py --compare --config
+    results/uni/component2_tune/best_config.json` to train all
+    three ablation modes through the full 5-fold CV with the
+    same deterministic patient-level split and the tuned
+    hyperparameters. This populates per-mode artifacts
+    (`cv_results_<mode>.csv`, `summary_<mode>.json`,
+    `fold{1..5}_<mode>_model.pt`, training and ROC plots) under
+    `results/{model}/component2/`, plus the bundled
+    `compare/comparison.json` and
+    `compare/compare_variants.png`. For a fast single-fold
+    sanity check use `--compare --folds 1`. Cross-source PRAME
+    normalization (Open Risk 3) is tuned in step 5a; CLI
+    `--prame-norm` overrides if needed.
 
 ## Decision History (abbreviated)
 

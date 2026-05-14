@@ -23,12 +23,20 @@ default 5) with the same deterministic patient-level split and emits
 a bundled comparison plot + JSON summary on top of the per-mode CV
 artifacts. Use `--compare --folds 1` for a single-fold sanity check.
 
+Hyperparameters can be loaded from a tuning run via `--config PATH`
+(produced by 09_tune_component2.py). CLI flags explicitly passed on the
+command line always win over the loaded config. Regularizers
+`--entropy-lambda`, `--grad-clip`, and `--label-smoothing` (all default 0,
+meaning disabled) are wired into the train loop and selectable by the
+tuner.
+
 Usage:
-    python 09_train_component2.py --mode full
-    python 09_train_component2.py --mode no_predicted
-    python 09_train_component2.py --mode no_prame
-    python 09_train_component2.py --compare
-    python 09_train_component2.py --mode full --epochs 100 --folds 5
+    python 10_train_component2.py --mode full
+    python 10_train_component2.py --mode no_predicted
+    python 10_train_component2.py --mode no_prame
+    python 10_train_component2.py --compare
+    python 10_train_component2.py --mode full --epochs 100 --folds 5
+    python 10_train_component2.py --compare --config results/uni/component2_tune/best_config.json
 """
 
 import argparse
@@ -302,50 +310,80 @@ def load_manifest(manifest_path, emb_root, model_name, mode, prame_norm):
 # Training / evaluation
 # ---------------------------------------------------------------------------
 
-def train_one_epoch(model, loader, optimizer, criterion, device):
+def compute_attention_entropy(attention):
+    """Shannon entropy of a post-softmax attention vector. Higher = more spread."""
+    return -(attention * torch.log(attention + 1e-8)).sum()
+
+
+def train_one_epoch(model, loader, optimizer, criterion, device,
+                    entropy_lambda=0.0, grad_clip=0.0, label_smoothing=0.0,
+                    amp=False):
     model.train()
     total_loss = 0.0
     preds, truths = [], []
+    autocast_ctx = (torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16)
+                    if amp and device.type == "cuda"
+                    else _NullCtx())
     for features, prame, has_prame, label in loader:
         features = features.to(device)
         prame = prame.to(device)
         label = label.to(device)
 
-        logit, _ = model(features, prame, has_prame)
-        loss = criterion(logit, label)
+        target = label
+        if label_smoothing > 0:
+            target = label * (1 - 2 * label_smoothing) + label_smoothing
+
+        with autocast_ctx:
+            logit, attention = model(features, prame, has_prame)
+            loss = criterion(logit, target)
+            if entropy_lambda > 0:
+                loss = loss - entropy_lambda * compute_attention_entropy(attention)
 
         optimizer.zero_grad()
         loss.backward()
+        if grad_clip > 0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip)
         optimizer.step()
 
         total_loss += loss.item()
-        preds.append(torch.sigmoid(logit).item())
+        preds.append(torch.sigmoid(logit.detach().float()).item())
         truths.append(label.item())
 
     auc = _safe_auc(truths, preds)
     return total_loss / max(1, len(loader)), auc
 
 
-def evaluate(model, loader, criterion, device):
+def evaluate(model, loader, criterion, device, amp=False):
     model.eval()
     total_loss = 0.0
     preds, truths = [], []
+    autocast_ctx = (torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16)
+                    if amp and device.type == "cuda"
+                    else _NullCtx())
     with torch.inference_mode():
         for features, prame, has_prame, label in loader:
             features = features.to(device)
             prame = prame.to(device)
             label = label.to(device)
 
-            logit, _ = model(features, prame, has_prame)
-            loss = criterion(logit, label)
+            with autocast_ctx:
+                logit, _ = model(features, prame, has_prame)
+                loss = criterion(logit, label)
 
             total_loss += loss.item()
-            preds.append(torch.sigmoid(logit).item())
+            preds.append(torch.sigmoid(logit.float()).item())
             truths.append(label.item())
 
     auc = _safe_auc(truths, preds)
     acc = accuracy_score(truths, [int(p > 0.5) for p in preds])
     return total_loss / max(1, len(loader)), auc, acc, preds, truths
+
+
+class _NullCtx:
+    def __enter__(self):
+        return self
+    def __exit__(self, *args):
+        return False
 
 
 def _safe_auc(truths, preds):
@@ -423,9 +461,13 @@ def train_one_fold(
     for epoch in range(args.epochs):
         train_loss, train_auc = train_one_epoch(
             model, train_loader, optimizer, criterion, device,
+            entropy_lambda=args.entropy_lambda,
+            grad_clip=args.grad_clip,
+            label_smoothing=args.label_smoothing,
+            amp=args.amp,
         )
         val_loss, val_auc, val_acc, _, _ = evaluate(
-            model, val_loader, criterion, device,
+            model, val_loader, criterion, device, amp=args.amp,
         )
         scheduler.step()
 
@@ -454,7 +496,7 @@ def train_one_fold(
     if best_state is not None:
         model.load_state_dict(best_state)
     _, val_auc, val_acc, val_preds, val_truths = evaluate(
-        model, val_loader, criterion, device,
+        model, val_loader, criterion, device, amp=args.amp,
     )
 
     val_binary = [int(p > 0.5) for p in val_preds]
@@ -713,6 +755,11 @@ def run_full_cv(df, feat_dim, args, mode, device, results_dir):
         "patience": args.patience,
         "seed": args.seed,
         "prame_norm": args.prame_norm,
+        "entropy_lambda": args.entropy_lambda,
+        "grad_clip": args.grad_clip,
+        "label_smoothing": args.label_smoothing,
+        "amp": bool(args.amp),
+        "device": device.type,
         "num_slides": len(df),
         "num_patients": int(df["patient"].nunique()),
         "mean_auc": float(np.nanmean(aucs)),
@@ -833,7 +880,15 @@ def run_compare(df, feat_dim, args, device, results_dir):
 # Main
 # ---------------------------------------------------------------------------
 
-def parse_args():
+# Hyperparameter keys that 09_tune_component2.py writes into best_config.json.
+# CLI flags explicitly passed on the command line still win over the config.
+_CONFIG_HYPERPARAMS = (
+    "lr", "weight_decay", "hidden_dim", "attn_dim", "dropout", "patience",
+    "prame_norm", "entropy_lambda", "grad_clip", "label_smoothing",
+)
+
+
+def _build_parser():
     p = argparse.ArgumentParser(
         description="Train Component-2 PRAME-conditioned diagnostic MIL.",
     )
@@ -858,10 +913,64 @@ def parse_args():
     p.add_argument("--prame-norm",
                    choices=("log", "raw", "zscore_per_source"), default="log",
                    help="PRAME preprocessing (default: log = log1p)")
+    p.add_argument("--entropy-lambda", type=float, default=0.0,
+                   help="Attention entropy regularizer weight (0 = disabled)")
+    p.add_argument("--grad-clip", type=float, default=0.0,
+                   help="Max gradient norm for clip_grad_norm_ (0 = disabled)")
+    p.add_argument("--label-smoothing", type=float, default=0.0,
+                   help="BCE label smoothing factor (0 = disabled)")
+    p.add_argument("--amp", action="store_true",
+                   help="bf16 autocast for forward pass (CUDA only)")
+    p.add_argument("--device", choices=("cpu", "cuda", "auto"), default="auto",
+                   help="Computation device (default: auto)")
+    p.add_argument("--config", default="",
+                   help="Path to best_config.json from 09_tune_component2.py. "
+                        "Hyperparameters in the JSON populate defaults; "
+                        "explicit CLI flags still win.")
     p.add_argument("--compare", action="store_true",
                    help="Run all three modes through the full --folds CV and "
                         "emit bundled comparison artifacts on top of per-mode CV")
-    return p.parse_args()
+    return p
+
+
+def parse_args():
+    parser = _build_parser()
+    args = parser.parse_args()
+
+    if args.config:
+        cfg_path = Path(args.config)
+        if not cfg_path.exists():
+            raise FileNotFoundError(f"--config not found: {cfg_path}")
+        with open(cfg_path) as f:
+            cfg = json.load(f)
+        hp = cfg.get("hyperparameters", {}) or {}
+        # Detect which flags appeared on the command line; those override config.
+        explicit = _explicit_cli_flags()
+        for key in _CONFIG_HYPERPARAMS:
+            cli_name = "--" + key.replace("_", "-")
+            if cli_name in explicit:
+                continue
+            if key in hp:
+                setattr(args, key, type(getattr(args, key))(hp[key]))
+        print(f"Loaded config from {cfg_path}")
+        for key in _CONFIG_HYPERPARAMS:
+            print(f"  {key} = {getattr(args, key)}")
+    return args
+
+
+def _explicit_cli_flags():
+    """Return the set of `--flag` tokens that appear in sys.argv."""
+    import sys as _sys
+    return {tok.split("=", 1)[0] for tok in _sys.argv[1:] if tok.startswith("--")}
+
+
+def _resolve_device(name):
+    if name == "auto":
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if name == "cuda" and not torch.cuda.is_available():
+        print("  [warn] --device cuda requested but CUDA not available; using CPU")
+        return torch.device("cpu")
+    return torch.device(name)
 
 
 def main():
@@ -869,7 +978,7 @@ def main():
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = _resolve_device(args.device)
     print(f"Device: {device}")
     print(f"Model:  {args.model.upper()}  (feat_dim={FEAT_DIMS[args.model]})")
     print(f"Mode:   {args.mode if not args.compare else f'compare (all three modes, {args.folds}-fold)'}")

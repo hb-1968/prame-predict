@@ -170,18 +170,26 @@ python 07_aggregate_hest_prame.py
 # into data/expression/diagnostic_manifest.csv.
 python 08_build_diagnostic_manifest.py
 
-# 09: Train the Component-2 PRAME-conditioned diagnostic MIL.
-# --compare runs the full 5-fold CV across all three ablation
-# modes (full / no_predicted / no_prame) with the same
-# deterministic patient-level split. Outputs per-mode CV
-# artifacts plus a bundled comparison plot and JSON under
-# results/{model}/component2/.
-python 09_train_component2.py --compare
+# 09: Optuna TPE (Bayesian) hyperparameter search for Component 2.
+# 10-fold CV on a stratified random ~200-slide subsample. Writes
+# results/{model}/component2_tune/best_config.json which step 10
+# consumes via --config. Pass --vram-cache --amp --n-jobs N on
+# GPU to preload the subsample to VRAM and run trials in parallel.
+python 09_tune_component2.py --model uni --trials 30
+
+# 10: Train the Component-2 PRAME-conditioned diagnostic MIL.
+# --config loads the tuned hyperparameters; --compare runs the
+# full 5-fold CV across all three ablation modes (full /
+# no_predicted / no_prame) with the same deterministic patient-
+# level split. Outputs per-mode CV artifacts plus a bundled
+# comparison plot and JSON under results/{model}/component2/.
+python 10_train_component2.py --compare \
+    --config results/uni/component2_tune/best_config.json
 
 # Equivalent split (run a single mode at a time):
-python 09_train_component2.py --mode full
-python 09_train_component2.py --mode no_predicted
-python 09_train_component2.py --mode no_prame
+python 10_train_component2.py --mode full
+python 10_train_component2.py --mode no_predicted
+python 10_train_component2.py --mode no_prame
 
 # Preferred path for COBRA: Colab GPU runtime via
 # notebooks/cobra_predict_colab.ipynb (bundles S3 download, tile,
