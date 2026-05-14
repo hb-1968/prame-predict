@@ -444,7 +444,11 @@ Same per-slide download/tile/extract/delete pattern as Component
     SKCM features come from Component 1 at `embeddings/uni/`
     (already on Drive). UNI only; CONCH is intentionally skipped.
     All three paths are resumable (skip slides with existing
-    `.h5` on Drive). The tuning notebook in step 5a does a
+    `.h5` on Drive). The diagnostic manifest CSV is tracked in
+    git, so the Colab notebooks read it directly from the cloned
+    repo (`/content/prame-predict/data/expression/`); push manifest
+    updates from your laptop with `git push`, no Drive copy of
+    the CSV needed. The tuning notebook in step 5a does a
     pre-flight check that every `source_group` present in the
     manifest has a populated embedding subdir on Drive; missing
     cohorts here will fail that check with a remediation pointer

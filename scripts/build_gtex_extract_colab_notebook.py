@@ -49,10 +49,12 @@ with streamed output.
 **Prerequisites**
 - Hugging Face access to `MahmoodLab/uni` (for UNI feature
   extractor weights).
-- Diagnostic manifest at
-  `<Drive>/prame-predict/data/expression/diagnostic_manifest.csv`
-  with `source_group=='gtex_normal'` rows whose `download_url`
-  points at BRD.
+- Diagnostic manifest tracked in the repo at
+  `data/expression/diagnostic_manifest.csv` with
+  `source_group=='gtex_normal'` rows whose `download_url` points
+  at BRD. The notebook reads the cloned copy directly (no Drive
+  sync needed). Push manifest updates with `git push` from your
+  laptop; Cell 1's `git pull --ff-only` picks them up.
 
 **Runtime** - L4 GPU, ~200 slides: roughly 45-90 min wall-clock
 (BRD bandwidth is the bottleneck; GPU-resident extract is ~5 sec
@@ -81,17 +83,21 @@ login()
 code("""# Cell 3: Paths.
 from pathlib import Path
 
-DRIVE_ROOT = Path('/content/drive/MyDrive/prame-predict')
-MANIFEST   = DRIVE_ROOT / 'data' / 'expression' / 'diagnostic_manifest.csv'
-EMB_DIR    = DRIVE_ROOT / 'embeddings'           # 08a appends uni_gtex/
-
 LOCAL_REPO = Path('/content/prame-predict')
+# Manifest comes from the cloned repo (tracked in git), not Drive.
+# Push manifest updates with `git push` from your laptop; this notebook's
+# Cell 1 `git pull --ff-only` picks them up before this cell runs.
+MANIFEST   = LOCAL_REPO / 'data' / 'expression' / 'diagnostic_manifest.csv'
+
+DRIVE_ROOT = Path('/content/drive/MyDrive/prame-predict')
+EMB_DIR    = DRIVE_ROOT / 'embeddings'           # 08a appends uni_gtex/
 
 assert MANIFEST.exists(), (
     f'Manifest not found at {MANIFEST}. Run 08_build_diagnostic_manifest.py '
-    'and sync data/expression/ to Drive first.'
+    'on your laptop, commit the CSV, and `git push`; then re-run Cell 1 to '
+    '`git pull --ff-only` here.'
 )
-print(f'Manifest: {MANIFEST}')
+print(f'Manifest: {MANIFEST}  (from cloned repo)')
 print(f'Embeddings dir (cohort subdir auto-appended): {EMB_DIR}')
 """)
 

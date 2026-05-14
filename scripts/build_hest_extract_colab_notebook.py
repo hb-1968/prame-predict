@@ -48,9 +48,11 @@ script with streamed output.
 **Prerequisites**
 - Hugging Face access to `MahmoodLab/hest` (gated; approved
   2026-05-14 for this project) and `MahmoodLab/uni`.
-- Diagnostic manifest at
-  `<Drive>/prame-predict/data/expression/diagnostic_manifest.csv`
-  with at least one `source_group=='hest_visium'` row.
+- Diagnostic manifest tracked in the repo at
+  `data/expression/diagnostic_manifest.csv`. The notebook reads
+  the cloned copy directly (no Drive sync needed). Push manifest
+  updates from your laptop with `git push`; the notebook's Cell 1
+  `git pull --ff-only` picks them up on the next run.
 
 **Runtime** - L4 GPU, ~88 slides: roughly 25-40 min wall-clock
 (HF download bandwidth is the bottleneck; GPU-resident extract is
@@ -79,17 +81,21 @@ login()
 code("""# Cell 3: Paths.
 from pathlib import Path
 
-DRIVE_ROOT = Path('/content/drive/MyDrive/prame-predict')
-MANIFEST   = DRIVE_ROOT / 'data' / 'expression' / 'diagnostic_manifest.csv'
-EMB_DIR    = DRIVE_ROOT / 'embeddings'           # 08a appends uni_hest/
-
 LOCAL_REPO = Path('/content/prame-predict')
+# Manifest comes from the cloned repo (tracked in git), not Drive.
+# Push manifest updates with `git push` from your laptop; this notebook's
+# Cell 1 `git pull --ff-only` picks them up before this cell runs.
+MANIFEST   = LOCAL_REPO / 'data' / 'expression' / 'diagnostic_manifest.csv'
+
+DRIVE_ROOT = Path('/content/drive/MyDrive/prame-predict')
+EMB_DIR    = DRIVE_ROOT / 'embeddings'           # 08a appends uni_hest/
 
 assert MANIFEST.exists(), (
     f'Manifest not found at {MANIFEST}. Run 08_build_diagnostic_manifest.py '
-    'and sync data/expression/ to Drive first.'
+    'on your laptop, commit the CSV, and `git push`; then re-run Cell 1 to '
+    '`git pull --ff-only` here.'
 )
-print(f'Manifest: {MANIFEST}')
+print(f'Manifest: {MANIFEST}  (from cloned repo)')
 print(f'Embeddings dir (cohort subdir auto-appended): {EMB_DIR}')
 """)
 

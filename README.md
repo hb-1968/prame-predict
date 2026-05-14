@@ -185,6 +185,9 @@ python 08a_extract_features.py --source-group gtex_normal --device cuda --amp
 #   notebooks/hest_extract_colab.ipynb   (HEST,  ~88 slides)
 #   notebooks/gtex_extract_colab.ipynb   (GTEx,  ~200 slides)
 #   notebooks/cobra_predict_colab.ipynb  (COBRA, when present; also runs Component-1 prediction)
+# The notebooks read data/expression/diagnostic_manifest.csv directly
+# from the cloned repo (git tracks the CSV), so no Drive sync of the
+# manifest is needed; just `git push` after 08, then `git pull` in Cell 1.
 # These are prereqs for step 09 (its sanity check requires every
 # source_group in the manifest to have an embedding subdir).
 

@@ -166,8 +166,9 @@ RESUME = False             # set True to continue an existing study at STUDY_DB_
                            # (the sqlite file in Cell 6's copy-back is reused)
 
 # Drive paths (adjust if your project lives elsewhere on Drive).
+# Manifest is NOT on Drive: it's tracked in git and arrives via Cell 1's
+# git clone / git pull. Only embeddings + results stay on Drive.
 DRIVE_ROOT = '/content/drive/MyDrive/prame-predict'
-MANIFEST_DRIVE = f'{DRIVE_ROOT}/data/expression/diagnostic_manifest.csv'
 EMB_DRIVE = f'{DRIVE_ROOT}/embeddings'
 RESULTS_DRIVE = f'{DRIVE_ROOT}/results'
 
@@ -182,16 +183,20 @@ STUDY_DB_LOCAL = '/content/component2_tune_study.db'
 STUDY_DB_DRIVE = f'{RESULTS_DRIVE}/{MODEL}/component2_tune/study.db'
 """)
 
-code("""# Cell 4: Sync inputs from Drive, then sanity-check that every
+code("""# Cell 4: Sync embeddings from Drive, then sanity-check that every
 # source_group in the manifest has an embedding subdir on Drive.
+# Manifest is read directly from the cloned repo (tracked in git).
 import os
 import shutil
 from pathlib import Path
 import pandas as pd
 
-Path(os.path.dirname(LOCAL_MANIFEST)).mkdir(parents=True, exist_ok=True)
-shutil.copy2(MANIFEST_DRIVE, LOCAL_MANIFEST)
-print(f'Copied manifest: {MANIFEST_DRIVE} -> {LOCAL_MANIFEST}')
+assert os.path.exists(LOCAL_MANIFEST), (
+    f'Manifest not found at {LOCAL_MANIFEST}. Run '
+    '08_build_diagnostic_manifest.py on your laptop, commit the CSV, '
+    'and `git push`; then re-run Cell 1 to `git pull --ff-only` here.'
+)
+print(f'Manifest: {LOCAL_MANIFEST}  (from cloned repo)')
 
 # Mirror per-cohort subdirs. Same mapping as 10_train_component2.py's
 # SOURCE_EMB_SUBDIR; keep these two lists in sync.
