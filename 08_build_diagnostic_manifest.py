@@ -17,6 +17,16 @@ units. Harmonization across sources (quantile-normalize vs.
 binarize vs. ignore) is pushed to 09's modeling stage rather than
 baked into this manifest.
 
+This script produces the manifest only; it does NOT extract H&E
+features. Per-cohort UNI feature extraction is handled by the
+Colab notebooks under notebooks/, which each read this manifest
+and write .h5 files to Drive at the subdir Component-2's parser
+expects (embeddings/uni_hest/, uni_gtex/, uni_cobra/, uni/ for
+SKCM). The run order is: this script (08) -> the relevant
+extraction notebooks (hest_extract_colab.ipynb,
+gtex_extract_colab.ipynb, cobra_predict_colab.ipynb) -> 09's
+tuning sweep.
+
 Prerequisites:
     - Component-1 completed (slide_manifest.csv with measured PRAME
       for 200 SKCM slides).

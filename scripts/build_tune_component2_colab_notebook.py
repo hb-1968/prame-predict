@@ -245,14 +245,27 @@ for src in present_sources:
               f'({n_h5} .h5 files for {n_rows} manifest rows)')
 
 if missing:
+    # Per-source remediation pointer. Keep this table in sync with the
+    # extraction notebooks under notebooks/.
+    REMEDIATION = {
+        'skcm_melanoma':     'notebooks/prame_predict.ipynb (Component-1 SKCM extraction)',
+        'skcm_normal':       'notebooks/prame_predict.ipynb (Component-1 SKCM extraction)',
+        'gtex_normal':       'notebooks/gtex_extract_colab.ipynb',
+        'hest_visium':       'notebooks/hest_extract_colab.ipynb',
+        'cobra_bcc':         'notebooks/cobra_predict_colab.ipynb',
+    }
     print()
-    print('=' * 60)
+    print('=' * 64)
     print('FATAL: required embedding subdirs are missing on Drive:')
     for src, sd, why in missing:
         print(f'  {src:14s} expected at {EMB_DRIVE}/{sd}  ({why})')
+        remedy = REMEDIATION.get(src, 'no extraction notebook registered for this cohort')
+        print(f'                  -> run {remedy}')
     print()
-    print('Upload the missing .h5 files to Drive and re-run Cell 4.')
-    print('=' * 60)
+    print('Run the indicated extraction notebook on Colab GPU first,')
+    print('then re-run Cell 4 here. The tuning sweep needs every')
+    print('source_group in the manifest to have a populated embedding subdir.')
+    print('=' * 64)
     raise RuntimeError(f'{len(missing)} source_group(s) missing embeddings on Drive')
 
 print('All source_groups have embeddings on Drive.')

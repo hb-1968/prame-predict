@@ -170,6 +170,24 @@ python 07_aggregate_hest_prame.py
 # into data/expression/diagnostic_manifest.csv.
 python 08_build_diagnostic_manifest.py
 
+# 08a: Per-cohort H&E feature extraction. CLI script that reads the
+# manifest, filters by --source-group, downloads each WSI via the
+# cohort's channel (HF for HEST, BRD HTTP for GTEx), tiles in-memory,
+# runs UNI, and writes .h5 to embeddings/uni_<cohort>/ matching the
+# SOURCE_EMB_SUBDIR convention used by 09 and 10. SKCM features come
+# from Component 1 (embeddings/uni/), already on Drive.
+#
+# CLI (CUDA box):
+python 08a_extract_features.py --source-group hest_visium --device cuda --amp
+python 08a_extract_features.py --source-group gtex_normal --device cuda --amp
+#
+# Colab (preferred, GPU runtime — these are thin wrappers calling 08a):
+#   notebooks/hest_extract_colab.ipynb   (HEST,  ~88 slides)
+#   notebooks/gtex_extract_colab.ipynb   (GTEx,  ~200 slides)
+#   notebooks/cobra_predict_colab.ipynb  (COBRA, when present; also runs Component-1 prediction)
+# These are prereqs for step 09 (its sanity check requires every
+# source_group in the manifest to have an embedding subdir).
+
 # 09: Optuna TPE (Bayesian) hyperparameter search for Component 2.
 # 10-fold CV on a stratified random ~200-slide subsample. Writes
 # results/{model}/component2_tune/best_config.json which step 10

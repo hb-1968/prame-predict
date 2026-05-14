@@ -417,6 +417,38 @@ Same per-slide download/tile/extract/delete pattern as Component
    invocation: `python 07_aggregate_hest_prame.py`.
 4. Run `08_build_diagnostic_manifest.py` to produce
    `data/expression/diagnostic_manifest.csv` (~600 rows).
+4.5. Run the per-cohort H&E feature extraction. The pipeline
+    script is `08a_extract_features.py` (reads the manifest,
+    filters by `--source-group`, downloads + tiles + runs UNI +
+    saves `.h5` to `embeddings/uni_<cohort>/` matching the
+    `SOURCE_EMB_SUBDIR` convention). Both CLI and Colab paths are
+    available:
+
+    CLI (locally on a CUDA box):
+    ```
+    python 08a_extract_features.py --source-group hest_visium --device cuda --amp
+    python 08a_extract_features.py --source-group gtex_normal --device cuda --amp
+    ```
+
+    Colab (preferred, since most of us don't have a CUDA box):
+    - `notebooks/hest_extract_colab.ipynb` (HEST, ~88 slides;
+      ~25 to 40 min on L4). Thin wrapper that mounts Drive,
+      HF-logs in, and shells out to `08a_extract_features.py`.
+    - `notebooks/gtex_extract_colab.ipynb` (GTEx, ~200 slides;
+      ~45 to 90 min on L4). Same thin-wrapper pattern.
+    - `notebooks/cobra_predict_colab.ipynb` (COBRA, only if COBRA
+      rows are present in the manifest; also runs Component-1
+      prediction). Currently not consolidated under 08a because
+      it bundles extraction + Component-1 ensemble.
+
+    SKCM features come from Component 1 at `embeddings/uni/`
+    (already on Drive). UNI only; CONCH is intentionally skipped.
+    All three paths are resumable (skip slides with existing
+    `.h5` on Drive). The tuning notebook in step 5a does a
+    pre-flight check that every `source_group` present in the
+    manifest has a populated embedding subdir on Drive; missing
+    cohorts here will fail that check with a remediation pointer
+    to the right notebook.
 5a. Run `09_tune_component2.py --model uni --trials 30` to do a
     Bayesian (Optuna TPE) hyperparameter search. 10-fold
     StratifiedGroupKFold patient-level CV on a stratified random
