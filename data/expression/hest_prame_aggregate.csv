@@ -1,0 +1,89 @@
+file_id,hest_cohort,disease,platform,n_in_tissue_spots,total_raw_counts,prame_raw_count,prame_tpm_pseudobulk
+TENX158,FFPE Human Skin Primary Dermal Melanoma with 5K Human Pan Tissue and Pathways Panel,Cancer,Xenium,2179,74011892,171423,2316.154814688429
+ZEN81,Nextflow Pipeline for Visium and H&E Data from Patient-Derived Xenograft Samples,Cancer,Visium,909,24769602,14255,575.5037969524096
+ZEN80,Nextflow Pipeline for Visium and H&E Data from Patient-Derived Xenograft Samples,Cancer,Visium,4992,45806888,25496,556.5975143301592
+ZEN79,Nextflow Pipeline for Visium and H&E Data from Patient-Derived Xenograft Samples,Cancer,Visium,4991,48254800,26253,544.0495038835514
+ZEN78,Nextflow Pipeline for Visium and H&E Data from Patient-Derived Xenograft Samples,Cancer,Visium,1098,42742336,23102,540.4945579015616
+TENX123,Human Skin Data with Xenium Human Multi-Tissue and Cancer Panel,Healthy,Xenium,10810,2586609,0,
+TENX122,Human Skin Data with Xenium Human Multi-Tissue and Cancer Panel,Healthy,Xenium,4266,1982951,0,
+TENX117,Human Skin Preview Data (Xenium Human Skin Gene Expression Panel with Custom Add-On),Cancer,Xenium,1830,15894298,0,
+TENX115,Human Skin Preview Data (Xenium Human Skin Gene Expression Panel),Cancer,Xenium,3886,23651907,0,
+ZEN65,Demo 10x Visium dataset for STQ,Cancer,Visium,909,1615494,941,582.4843670109576
+MEND40,Human squamous cell carcinoma,Cancer,Visium,2793,14231789,8,0.5621218808120328
+MEND39,Human squamous cell carcinoma,Cancer,Visium,2496,7359364,1,0.13588130713469262
+MEND38,Human squamous cell carcinoma,Cancer,Visium,2752,9300492,2,0.21504238700490255
+MEND37,Human squamous cell carcinoma,Cancer,Visium,2363,5842109,3,0.5135131850501249
+NCBI770,Single Cell and Spatial Analysis of Human Squamous Cell Carcinoma [ST],Cancer,Spatial Transcriptomics,666,5998035,2,0.33344253576379596
+NCBI769,Single Cell and Spatial Analysis of Human Squamous Cell Carcinoma [ST],Cancer,Spatial Transcriptomics,646,7136698,1,0.1401208233835872
+NCBI768,Single Cell and Spatial Analysis of Human Squamous Cell Carcinoma [ST],Cancer,Spatial Transcriptomics,638,7008975,0,
+NCBI767,Single Cell and Spatial Analysis of Human Squamous Cell Carcinoma [ST],Cancer,Spatial Transcriptomics,590,1386305,12,8.656103815538428
+NCBI766,Single Cell and Spatial Analysis of Human Squamous Cell Carcinoma [ST],Cancer,Spatial Transcriptomics,521,1743688,19,10.896444776817871
+NCBI765,Single Cell and Spatial Analysis of Human Squamous Cell Carcinoma [ST],Cancer,Spatial Transcriptomics,521,1043716,25,23.952876069735446
+NCBI764,Single Cell and Spatial Analysis of Human Squamous Cell Carcinoma [ST],Cancer,Spatial Transcriptomics,1145,2109135,0,
+NCBI763,Single Cell and Spatial Analysis of Human Squamous Cell Carcinoma [ST],Cancer,Spatial Transcriptomics,1071,1802967,1,0.5546413217768268
+NCBI762,Single Cell and Spatial Analysis of Human Squamous Cell Carcinoma [ST],Cancer,Spatial Transcriptomics,1182,999120,0,
+NCBI761,Single Cell and Spatial Analysis of Human Squamous Cell Carcinoma [ST],Cancer,Spatial Transcriptomics,608,1060339,1,0.9430946140809685
+NCBI760,Single Cell and Spatial Analysis of Human Squamous Cell Carcinoma [ST],Cancer,Spatial Transcriptomics,621,2272901,0,
+NCBI759,Single Cell and Spatial Analysis of Human Squamous Cell Carcinoma [ST],Cancer,Spatial Transcriptomics,462,1437738,3,2.086611051526773
+NCBI689,A cellular hierarchy in melanoma uncouples growth and metastasis,Cancer,Visium,2744,14836133,0,
+NCBI688,A cellular hierarchy in melanoma uncouples growth and metastasis,Cancer,Visium,2198,21908638,0,
+NCBI687,A cellular hierarchy in melanoma uncouples growth and metastasis,Cancer,Visium,2641,19547506,0,
+NCBI526,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,818,719053,2,2.781436138921609
+NCBI525,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,777,304605,1,3.282940201244234
+NCBI524,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,909,7325920,9,1.2285146438945551
+NCBI523,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,752,8024328,10,1.246210274555078
+NCBI522,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,587,3332849,0,0.0
+NCBI521,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,464,3758790,0,0.0
+NCBI520,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,527,7298036,0,0.0
+NCBI519,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,524,11691137,0,0.0
+NCBI518,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,546,1148998,0,0.0
+NCBI517,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,549,1032311,0,0.0
+NCBI516,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,450,7837183,0,0.0
+NCBI515,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,825,14444608,2,0.13845997066863983
+NCBI510,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,525,1050295,2,1.904226907678319
+NCBI509,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,768,1865251,1,0.5361208759571768
+NCBI508,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,442,2299813,0,0.0
+NCBI507,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,469,1861982,2,1.0741242396543038
+NCBI506,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,666,1232549,0,0.0
+NCBI505,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,706,784663,0,0.0
+NCBI504,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,1000,15217246,4,0.26285965279131324
+NCBI503,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,985,14144635,2,0.14139636689105092
+NCBI498,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,698,4526990,1,0.2208973291303935
+NCBI497,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,765,1120717,0,0.0
+NCBI496,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,697,2062754,0,0.0
+NCBI495,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,706,8743365,0,0.0
+NCBI494,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,508,3532882,1,0.28305502419837403
+NCBI493,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,566,3094003,0,0.0
+NCBI492,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,814,9496593,1,0.1053009221307052
+NCBI491,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,913,9264034,0,0.0
+NCBI490,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,617,446231,0,0.0
+NCBI489,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,585,679701,0,0.0
+NCBI488,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,1021,5873368,0,0.0
+NCBI487,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,1014,4245034,0,0.0
+NCBI486,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,305,1443493,0,0.0
+NCBI485,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,545,2146796,0,0.0
+NCBI484,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,713,3519737,2,0.5682242735749858
+NCBI483,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,923,3765271,3,0.7967553995449465
+NCBI482,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,625,1438737,0,0.0
+NCBI481,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,651,1729572,0,0.0
+NCBI480,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,695,5987919,0,0.0
+NCBI479,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,1040,8870277,4,0.450944203884501
+NCBI478,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,790,2225142,0,0.0
+NCBI477,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,791,1563868,0,0.0
+NCBI476,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,1144,4970420,1,0.20119024146852782
+NCBI475,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,1414,6686569,0,0.0
+NCBI474,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,598,738422,0,0.0
+NCBI473,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,744,422422,0,0.0
+NCBI472,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,1122,13046660,0,0.0
+NCBI471,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,1117,8378001,0,0.0
+NCBI470,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,1350,4945612,1,0.20219944467944514
+NCBI469,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,1504,5490636,2,0.3642565269305778
+NCBI468,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,1964,29249344,2,0.06837760190450767
+NCBI467,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,1906,29458018,2,0.0678932302913251
+NCBI466,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,691,2311770,2,0.8651379678774272
+NCBI465,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,736,1600795,2,1.2493792147026945
+NCBI464,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,1979,34641956,3,0.0866001908206338
+NCBI463,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,1253,30069846,4,0.13302362772326803
+NCBI462,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,2043,11036908,3,0.27181525840389353
+NCBI461,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,1987,40800400,7,0.1715669454221037
+NCBI460,Spatial transcriptomics landscape of non-communicable inflammatory skin diseases,Diseased,Visium,1951,1181968,0,0.0
