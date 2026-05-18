@@ -157,12 +157,15 @@ class CachedSlideDataset(SlideDataset):
     """SlideDataset subclass that pulls features from a pre-loaded cache.
 
     Falls back to h5 read on cache miss so partial caching still works.
-    PRAME / has_prame / label come from the parent class's arrays (passed
-    per fold to allow per-trial PRAME normalization changes).
+    PRAME / has_prame / cohort_idx / label come from the parent class's
+    arrays. cohort_idxs is required by the parent's 5-tuple contract; the
+    tuner does not engage the DANN adversary so the value is functionally
+    inert (a zero placeholder is sufficient).
     """
 
-    def __init__(self, slide_paths, prames, has_prames, labels, feature_cache):
-        super().__init__(slide_paths, prames, has_prames, labels)
+    def __init__(self, slide_paths, prames, has_prames, cohort_idxs, labels,
+                 feature_cache):
+        super().__init__(slide_paths, prames, has_prames, cohort_idxs, labels)
         self.feature_cache = feature_cache
 
     def __getitem__(self, idx):
@@ -175,6 +178,7 @@ class CachedSlideDataset(SlideDataset):
             feat,
             torch.tensor(self.prames[idx], dtype=torch.float32),
             bool(self.has_prames[idx]),
+            torch.tensor(self.cohort_idxs[idx], dtype=torch.long),
             torch.tensor(self.labels[idx], dtype=torch.float32),
         )
 
@@ -230,12 +234,20 @@ def stratified_subsample(df, max_slides, min_per_cohort, seed):
 # ---------------------------------------------------------------------------
 
 def _make_loaders(df, train_idx, val_idx, feature_cache):
+    # Tuner doesn't engage DANN; pass placeholder cohort_idx=0 for every row.
+    # Backbone Component2MIL has no .grl, so the cohort_idx is never read
+    # downstream — but the 5-tuple SlideDataset contract still requires it.
     def _ds(idx):
         sub = df.iloc[idx]
+        cohort_col = sub.get("cohort_idx", pd.Series([0] * len(sub)))
+        cohort_list = cohort_col.tolist() if hasattr(cohort_col, "tolist") else list(cohort_col)
+        if len(cohort_list) != len(sub):
+            cohort_list = [0] * len(sub)
         return CachedSlideDataset(
             sub["h5_path"].tolist(),
             sub["prame"].tolist(),
             sub["has_prame"].tolist(),
+            cohort_list,
             sub["label"].tolist(),
             feature_cache,
         )
@@ -279,7 +291,7 @@ def _train_one_fold(df, train_idx, val_idx, feat_dim, hp, device,
             label_smoothing=hp["label_smoothing"],
             amp=amp,
         )
-        _, val_auc, _, _, _ = evaluate(
+        _, val_auc, _, _, _, _ = evaluate(
             model, val_loader, criterion, device, amp=amp,
         )
         scheduler.step()

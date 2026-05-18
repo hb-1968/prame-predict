@@ -52,6 +52,10 @@ on Colab GPU with the tuned hyperparameters from a prior
   same deterministic patient-level split.
 - Loads `best_config.json` from Drive (produced by the tuning notebook)
   so hyperparameters are pinned to the tuned values.
+- DANN (domain-adversarial training) cohort-adversary is ON by default
+  via Cell 3's `USE_DANN`. Toggles `ADV_LAMBDA` / `COHORT_ENCODING` /
+  `PRAME_NORM` from Cell 3 so you can A/B the cohort-leakage fix without
+  hand-editing the CLI invocation.
 - Streams training output and copies every artifact under
   `results/{model}/component2/` back to Drive when done.
 
@@ -111,6 +115,13 @@ print(f'AMP:        bf16 autocast enabled in Cell 5 via --amp')
 """)
 
 code("""# Cell 3: Training configuration. Edit before running for ablations / shorter sweeps.
+#
+# Verification recipes for the cohort-leakage fix (set Cell 3 to one of these,
+# then run Cells 4-7; each leaves its own results/ subtree on Drive):
+#   1. Leaky baseline (reproduces ~1.0 AUC): PRAME_NORM='log', USE_DANN=False
+#   2. z-score alone:                        PRAME_NORM='zscore_per_source', USE_DANN=False
+#   3. Full fix (defaults below):            PRAME_NORM='zscore_per_source', USE_DANN=True, COHORT_ENCODING='multiclass'
+#   4. Binary cohort A/B:                    PRAME_NORM='zscore_per_source', USE_DANN=True, COHORT_ENCODING='binary_tcga'
 MODEL = 'uni'              # 'uni' or 'conch' (uni recommended; component 1 showed conch near chance)
 MODE = 'compare'           # 'compare' | 'full' | 'no_predicted' | 'no_prame'
 FOLDS = 5                  # CV folds (5 is the production default)
@@ -118,6 +129,23 @@ EPOCHS = 50                # max epochs per fold (early stopping kicks in via tu
 SEED = 42
 USE_TUNED_CONFIG = True    # load best_config.json from Drive; set False to use script defaults
 USE_AMP = True             # bf16 autocast on CUDA forward pass
+
+# --- PRAME normalization ---
+# 'zscore_per_source' centers each cohort at 0/1 so the PRAME instance
+# cannot encode cohort-conditional magnitude (the leakage path).
+# 'log' is the legacy behavior; 'raw' is unprocessed.
+PRAME_NORM = 'zscore_per_source'
+
+# --- DANN cohort-adversary (domain-adversarial training) ---
+# When True, attaches a gradient-reversal cohort-predictor head that
+# forces the post-attention slide_repr to be cohort-invariant. This is
+# the fix for the 0.99-1.0 leaky AUC: it stops the model from using
+# scanner / stain identity as a melanoma proxy.
+USE_DANN = True
+ADV_LAMBDA = 1.0           # max GRL lambda (paper schedule ramps 0 -> ADV_LAMBDA)
+ADV_WARMUP_EPOCHS = 0      # epochs before adversary engages (lambda=0)
+ADV_HIDDEN_DIM = 64        # CohortAdversary MLP hidden dim
+COHORT_ENCODING = 'multiclass'  # 'multiclass' (4 source_groups) | 'binary_tcga'
 
 # Drive paths (adjust if your project lives elsewhere on Drive).
 DRIVE_ROOT = '/content/drive/MyDrive/prame-predict'
@@ -263,6 +291,21 @@ if USE_TUNED_CONFIG:
 if USE_AMP:
     cmd.append('--amp')
 
+# PRAME normalization (default zscore_per_source neutralizes the
+# cross-cohort magnitude confound).
+cmd += ['--prame-norm', PRAME_NORM]
+
+# DANN cohort-adversary. When disabled, fall back to the leaky baseline.
+if not USE_DANN:
+    cmd.append('--adv-disable')
+else:
+    cmd += [
+        '--adv-lambda', str(ADV_LAMBDA),
+        '--adv-warmup-epochs', str(ADV_WARMUP_EPOCHS),
+        '--adv-hidden-dim', str(ADV_HIDDEN_DIM),
+        '--cohort-encoding', COHORT_ENCODING,
+    ]
+
 print('Command:')
 print('  ' + ' '.join(cmd))
 print()
@@ -370,6 +413,51 @@ if MODE == 'compare':
                   f'{_fmt(s[\"mean_sensitivity\"], s[\"std_sensitivity\"]):>17s} '
                   f'{_fmt(s[\"mean_specificity\"], s[\"std_specificity\"]):>17s} '
                   f'{s[\"pooled_auc\"]:>8.3f}')
+
+        # Pairwise AUC + adversary diagnostics (the real cohort-leakage probe).
+        # Under leakage, skcm_vs_gtex and skcm_vs_hest both inflate toward 1.0;
+        # under DANN, the harder hest comparison should drop while gtex stays
+        # high (real biological gap). adversary_final_acc near chance means the
+        # backbone successfully scrubbed cohort identity from slide_repr.
+        print()
+        print('=' * 64)
+        print('PAIRWISE AUC + ADVERSARY (cohort-leakage diagnostics)')
+        print('=' * 64)
+        for sub_mode in ('full', 'no_predicted', 'no_prame'):
+            s = comp.get(sub_mode, {})
+            if not s:
+                continue
+            print(f'\\n--- {sub_mode} ---')
+            pw = s.get('pairwise_auc', {}) or {}
+            for k, v in pw.items():
+                v_str = f'{v:.3f}' if (v is not None and v == v) else 'n/a'
+                print(f'  {k:42s} = {v_str}')
+            adv_mean = s.get('adversary_final_acc_mean', float('nan'))
+            chance = s.get('adversary_chance_acc', float('nan'))
+            if adv_mean == adv_mean:  # not NaN
+                print(f'  adversary final acc (mean over folds) = {adv_mean:.3f}'
+                      f'   (chance = {chance:.3f})')
+            per_src = s.get('per_source_group', {}) or {}
+            for src_name, src_stats in per_src.items():
+                mp = src_stats.get('mean_pred', float('nan'))
+                n = src_stats.get('n', 0)
+                print(f'  mean_pred[{src_name}] (n={n}) = {mp:.3f}')
+
+        # Paired differences: did adding PRAME actually contribute signal,
+        # or is the apparent full vs. no_prame gap noise?
+        pd_block = comp.get('paired_deltas', {}) or {}
+        if pd_block:
+            print()
+            print('=' * 64)
+            print('PAIRED DIFFERENCES (Wilcoxon signed-rank)')
+            print('=' * 64)
+            for pair_key, pair_stats in pd_block.items():
+                mean_d = pair_stats.get('mean_delta', float('nan'))
+                std_d = pair_stats.get('std_delta', float('nan'))
+                p = pair_stats.get('wilcoxon_p', float('nan'))
+                p_str = f'{p:.4f}' if p == p else 'n/a'
+                print(f'  {pair_key:30s}  delta = {mean_d:+.3f} +/- {std_d:.3f}'
+                      f'   wilcoxon p = {p_str}')
 else:
     # Single-mode run: show that mode's plots + summary
     png = local_c2_dir / f'cv_results_{MODE}.png'
@@ -441,6 +529,41 @@ To re-run a single mode without re-doing the whole compare sweep, set
 re-run Cells 5 to 7. The deterministic patient-level split (seed=42)
 guarantees the per-fold metrics will match the corresponding mode from
 the compare run exactly.
+
+## Verification recipes (cohort-leakage fix)
+
+The 200 melanoma=1 rows are 100% TCGA-SKCM and the 291 melanoma=0 rows
+are 100% non-TCGA, so a trivial cohort classifier scores AUC=1.0 on this
+manifest. The fix is DANN (domain-adversarial training) + per-source
+PRAME z-score. Run the notebook four times (one per Cell 3 config below)
+to validate the fix:
+
+| Run | `PRAME_NORM`        | `USE_DANN` | `COHORT_ENCODING` | Purpose                              |
+| --- | ------------------- | ---------- | ----------------- | ------------------------------------ |
+| 1   | `log`               | `False`    | (unused)          | Reproduce leaky ~1.0 AUC baseline    |
+| 2   | `zscore_per_source` | `False`    | (unused)          | z-score alone, no DANN               |
+| 3   | `zscore_per_source` | `True`     | `multiclass`      | **Full fix** (matches defaults)      |
+| 4   | `zscore_per_source` | `True`     | `binary_tcga`     | A/B vs binary cohort encoding        |
+
+**Acceptance criteria for run 3 (full fix, `full` mode)**:
+
+- `pairwise_auc["skcm_melanoma_vs_gtex_normal"]` and
+  `pairwise_auc["skcm_melanoma_vs_hest_visium"]` within 0.05 of each other
+  (currently both inflated to ~1.0; under DANN, hest should drop to
+  ~0.7-0.85, gtex stays high since the biological gap is real).
+- `adversary_final_acc_mean - adversary_chance_acc < 0.10` (cohort
+  identity successfully scrubbed from slide_repr).
+- `no_prame` pooled AUC < 0.85 (visual stream no longer leaks cohort).
+- `paired_deltas["full_vs_no_prame"]` has positive mean delta and
+  Wilcoxon p < 0.05 (PRAME contributes real signal on top of visual).
+- `per_source_group["hest_visium"]["mean_pred"] < 0.3` (HEST looks like
+  a clear negative once cohort signal is gone).
+
+**Failure modes**: adversary stuck above chance -> bump `ADV_LAMBDA` to
+2.0 or 5.0. Main val AUC tanks to ~0.5 -> lower `ADV_LAMBDA` or set
+`ADV_WARMUP_EPOCHS = 5`. Negative `full - no_prame` delta -> PRAME
+magnitude WAS the only PRAME signal; fall back to `PRAME_NORM = 'log'`
+(keep DANN; accept the magnitude signal).
 """)
 
 
