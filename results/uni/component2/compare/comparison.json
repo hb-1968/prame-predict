@@ -1,0 +1,243 @@
+{
+  "full": {
+    "val_auc_per_fold": [
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ],
+    "val_acc_per_fold": [
+      0.9390243902439024,
+      1.0,
+      0.9876543209876543,
+      0.9375,
+      0.9761904761904762
+    ],
+    "sensitivity_per_fold": [
+      0.782608695652174,
+      1.0,
+      0.9615384615384616,
+      0.782608695652174,
+      0.9166666666666666
+    ],
+    "specificity_per_fold": [
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ],
+    "mean_val_auc": 1.0,
+    "std_val_auc": 0.0,
+    "mean_val_acc": 0.9680738374844065,
+    "std_val_acc": 0.025484053580934276,
+    "mean_sensitivity": 0.8886845039018952,
+    "std_sensitivity": 0.09053838350615193,
+    "mean_specificity": 1.0,
+    "std_specificity": 0.0,
+    "pooled_auc": 0.9999999999999999,
+    "adversary_final_acc_per_fold": [
+      0.8048780487804879,
+      0.3125,
+      0.2962962962962963,
+      0.225,
+      0.023809523809523808
+    ],
+    "adversary_final_acc_mean": 0.3324967737772616,
+    "adversary_chance_acc": 0.3333333333333333,
+    "per_source_group": {
+      "gtex_normal": {
+        "n": 199,
+        "mean_pred": 0.16969122902382558,
+        "mean_label": 0.0
+      },
+      "hest_visium": {
+        "n": 88,
+        "mean_pred": 0.19978746107186784,
+        "mean_label": 0.0
+      },
+      "skcm_melanoma": {
+        "n": 120,
+        "mean_pred": 0.6711916320025921,
+        "mean_label": 1.0
+      }
+    },
+    "pairwise_auc": {
+      "skcm_melanoma_vs_gtex_normal": 1.0,
+      "skcm_melanoma_vs_hest_visium": 1.0,
+      "skcm_melanoma_vs_skcm_normal": NaN,
+      "hest_visium_vs_gtex_normal": NaN
+    }
+  },
+  "no_predicted": {
+    "val_auc_per_fold": [
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ],
+    "val_acc_per_fold": [
+      0.9634146341463414,
+      0.9375,
+      0.9876543209876543,
+      0.925,
+      0.9761904761904762
+    ],
+    "sensitivity_per_fold": [
+      0.8695652173913043,
+      0.7916666666666666,
+      0.9615384615384616,
+      0.7391304347826086,
+      0.9166666666666666
+    ],
+    "specificity_per_fold": [
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ],
+    "mean_val_auc": 1.0,
+    "std_val_auc": 0.0,
+    "mean_val_acc": 0.9579518862648945,
+    "std_val_acc": 0.023447084533290304,
+    "mean_sensitivity": 0.8557134894091416,
+    "std_sensitivity": 0.08099344299572604,
+    "mean_specificity": 1.0,
+    "std_specificity": 0.0,
+    "pooled_auc": 0.9998548199767712,
+    "adversary_final_acc_per_fold": [
+      0.47560975609756095,
+      0.475,
+      0.012345679012345678,
+      0.6375,
+      0.023809523809523808
+    ],
+    "adversary_final_acc_mean": 0.32485299178388605,
+    "adversary_chance_acc": 0.3333333333333333,
+    "per_source_group": {
+      "gtex_normal": {
+        "n": 199,
+        "mean_pred": 0.17339876780857394,
+        "mean_label": 0.0
+      },
+      "hest_visium": {
+        "n": 88,
+        "mean_pred": 0.20291688547215678,
+        "mean_label": 0.0
+      },
+      "skcm_melanoma": {
+        "n": 120,
+        "mean_pred": 0.6658398325244586,
+        "mean_label": 1.0
+      }
+    },
+    "pairwise_auc": {
+      "skcm_melanoma_vs_gtex_normal": 1.0,
+      "skcm_melanoma_vs_hest_visium": 0.9995265151515151,
+      "skcm_melanoma_vs_skcm_normal": NaN,
+      "hest_visium_vs_gtex_normal": NaN
+    }
+  },
+  "no_prame": {
+    "val_auc_per_fold": [
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ],
+    "val_acc_per_fold": [
+      1.0,
+      0.9625,
+      0.9753086419753086,
+      0.9875,
+      0.9761904761904762
+    ],
+    "sensitivity_per_fold": [
+      1.0,
+      0.875,
+      0.9230769230769231,
+      0.9565217391304348,
+      0.9166666666666666
+    ],
+    "specificity_per_fold": [
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ],
+    "mean_val_auc": 1.0,
+    "std_val_auc": 0.0,
+    "mean_val_acc": 0.980299823633157,
+    "std_val_acc": 0.01263781500668662,
+    "mean_sensitivity": 0.9342530657748049,
+    "std_sensitivity": 0.04186565794524045,
+    "mean_specificity": 1.0,
+    "std_specificity": 0.0,
+    "pooled_auc": 0.9999709639953542,
+    "adversary_final_acc_per_fold": [
+      0.36585365853658536,
+      0.5125,
+      0.4444444444444444,
+      0.7375,
+      0.40476190476190477
+    ],
+    "adversary_final_acc_mean": 0.4930120015485868,
+    "adversary_chance_acc": 0.3333333333333333,
+    "per_source_group": {
+      "gtex_normal": {
+        "n": 199,
+        "mean_pred": 0.15780241360616445,
+        "mean_label": 0.0
+      },
+      "hest_visium": {
+        "n": 88,
+        "mean_pred": 0.21023564447056164,
+        "mean_label": 0.0
+      },
+      "skcm_melanoma": {
+        "n": 120,
+        "mean_pred": 0.6896723707516988,
+        "mean_label": 1.0
+      }
+    },
+    "pairwise_auc": {
+      "skcm_melanoma_vs_gtex_normal": 1.0,
+      "skcm_melanoma_vs_hest_visium": 0.999905303030303,
+      "skcm_melanoma_vs_skcm_normal": NaN,
+      "hest_visium_vs_gtex_normal": NaN
+    }
+  },
+  "paired_deltas": {
+    "full_vs_no_prame": {
+      "deltas_per_fold": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "mean_delta": 0.0,
+      "std_delta": 0.0,
+      "wilcoxon_stat": NaN,
+      "wilcoxon_p": NaN
+    },
+    "no_predicted_vs_no_prame": {
+      "deltas_per_fold": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "mean_delta": 0.0,
+      "std_delta": 0.0,
+      "wilcoxon_stat": NaN,
+      "wilcoxon_p": NaN
+    }
+  }
+}

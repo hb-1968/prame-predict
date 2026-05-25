@@ -1,0 +1,73 @@
+{
+  "model": "uni",
+  "mode": "no_prame",
+  "folds": 5,
+  "epochs": 50,
+  "lr": 1.4395629532046054e-05,
+  "weight_decay": 4.4249937333675625e-05,
+  "hidden_dim": 128,
+  "attn_dim": 64,
+  "dropout": 0.3447847724327217,
+  "patience": 5,
+  "seed": 42,
+  "prame_norm": "zscore_per_source",
+  "entropy_lambda": 0.0001,
+  "grad_clip": 0.0,
+  "label_smoothing": 0.07524617998080964,
+  "adv_lambda_max": 1.0,
+  "adv_disabled": false,
+  "adv_warmup_epochs": 0,
+  "adv_hidden_dim": 64,
+  "cohort_encoding": "multiclass",
+  "num_cohorts": 3,
+  "cohort_names": [
+    "gtex_normal",
+    "hest_visium",
+    "skcm_melanoma"
+  ],
+  "adversary_chance_acc": 0.3333333333333333,
+  "amp": true,
+  "device": "cuda",
+  "num_slides": 407,
+  "num_patients": 396,
+  "mean_auc": 1.0,
+  "std_auc": 0.0,
+  "mean_acc": 0.980299823633157,
+  "std_acc": 0.01263781500668662,
+  "mean_sensitivity": 0.9342530657748049,
+  "std_sensitivity": 0.04186565794524045,
+  "mean_specificity": 1.0,
+  "std_specificity": 0.0,
+  "pooled_auc": 0.9999709639953542,
+  "adversary_final_acc_per_fold": [
+    0.36585365853658536,
+    0.5125,
+    0.4444444444444444,
+    0.7375,
+    0.40476190476190477
+  ],
+  "adversary_final_acc_mean": 0.4930120015485868,
+  "per_source_group": {
+    "gtex_normal": {
+      "n": 199,
+      "mean_pred": 0.15780241360616445,
+      "mean_label": 0.0
+    },
+    "hest_visium": {
+      "n": 88,
+      "mean_pred": 0.21023564447056164,
+      "mean_label": 0.0
+    },
+    "skcm_melanoma": {
+      "n": 120,
+      "mean_pred": 0.6896723707516988,
+      "mean_label": 1.0
+    }
+  },
+  "pairwise_auc": {
+    "skcm_melanoma_vs_gtex_normal": 1.0,
+    "skcm_melanoma_vs_hest_visium": 0.999905303030303,
+    "skcm_melanoma_vs_skcm_normal": NaN,
+    "hest_visium_vs_gtex_normal": NaN
+  }
+}

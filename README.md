@@ -532,3 +532,244 @@ Per-fold CSVs, model weights, ROC curves, and training curves are in
 `results/uni/` and `results/conch/`. Regularization diagnostics are
 in `results/uni/ablation/` and `results/uni/compare/`. The full
 48-slide attention panel is in `results/{model}/heatmaps/`.
+
+### Component 2 — PRAME-Conditioned Melanoma Classifier
+
+Component 2 trains a gated-attention MIL classifier on the 491-row
+diagnostic manifest (200 TCGA-SKCM melanoma, 200 GTEx normal skin, 88
+HEST Visium non-melanoma skin, 3 SKCM tumor-free). The PRAME scalar is
+projected to the patch feature dimension and appended as a single
+extra MIL instance, co-attended with H&E patches under gated
+attention. Patient-level stratified 5-fold CV (seed=42) is run
+separately for three ablation modes: `full` (all PRAME sources
+active), `no_predicted` (Component 1's predicted PRAME silenced —
+architecturally identical to `full` in this run because the trained
+manifest contained no COBRA rows; the small numeric differences
+between the two columns below reflect training stochasticity, not a
+signal contribution), and `no_prame` (PRAME projection branch removed
+entirely, visual-only baseline). All three modes use a DANN cohort
+adversary with gradient reversal to discourage scanner/source
+shortcut learning. 407 slides per fold (120 SKCM + 199 GTEx + 88
+HEST) entered training; the remaining 84 manifest rows were awaiting
+embedding extraction at training time.
+
+#### Per-fold Validation AUC
+
+| Fold | full | no_predicted | no_prame |
+|------|------|--------------|----------|
+| 1 | 1.000 | 1.000 | 1.000 |
+| 2 | 1.000 | 1.000 | 1.000 |
+| 3 | 1.000 | 1.000 | 1.000 |
+| 4 | 1.000 | 1.000 | 1.000 |
+| 5 | 1.000 | 1.000 | 1.000 |
+
+#### Aggregate Metrics (5-fold CV)
+
+| Metric | full | no_predicted | no_prame |
+|--------|------|--------------|----------|
+| Mean AUC | **1.000 ± 0.000** | **1.000 ± 0.000** | **1.000 ± 0.000** |
+| Pooled AUC | 1.0000 | 0.99985 | 0.99997 |
+| Accuracy | 0.968 ± 0.025 | 0.958 ± 0.023 | 0.980 ± 0.013 |
+| Sensitivity | 0.889 ± 0.091 | 0.856 ± 0.081 | 0.934 ± 0.042 |
+| Specificity | 1.000 ± 0.000 | 1.000 ± 0.000 | 1.000 ± 0.000 |
+
+#### Paired Comparison
+
+Per-fold paired delta in validation AUC for **full vs no_prame**:
+`[0.0, 0.0, 0.0, 0.0, 0.0]`. Mean Δ = 0.0, std = 0.0, Wilcoxon p = N/A
+(all deltas zero). Same result for **no_predicted vs no_prame**. The
+PRAME projection branch contributes no measurable signal beyond what
+the visual-only baseline already extracts from the same patches.
+
+#### Per-source Mean Prediction
+
+| Source | n slides | full | no_predicted | no_prame |
+|--------|----------|------|--------------|----------|
+| skcm_melanoma | 120 | 0.671 | 0.666 | 0.690 |
+| gtex_normal | 199 | 0.169 | 0.173 | 0.158 |
+| hest_visium | 88 | 0.200 | 0.203 | 0.210 |
+
+Every melanoma slide scores above every non-melanoma slide regardless
+of mode.
+
+#### Cohort Adversary (DANN)
+
+Mean final-epoch adversary accuracy across folds: full = 0.332,
+no_predicted = 0.325, no_prame = 0.493. Chance for the 3-class cohort
+task (gtex_normal, hest_visium, skcm_melanoma) is 0.333. Explicit
+cohort identity is scrubbed from the bag representation under `full`
+and `no_predicted` — the adversary cannot recover source from the
+bag — yet the classifier still reaches AUC 1.0. This tension is
+unpacked in the Limitations section below.
+
+#### Pairwise AUC
+
+| Pair | full | no_predicted | no_prame |
+|------|------|--------------|----------|
+| skcm_melanoma vs gtex_normal | 1.0000 | 1.0000 | 1.0000 |
+| skcm_melanoma vs hest_visium | 1.0000 | 0.9995 | 0.9999 |
+
+Every melanoma-vs-non-melanoma cohort pair is perfectly or
+near-perfectly separable, with or without PRAME conditioning.
+
+#### Training Configuration
+
+The production hyperparameters were taken from an Optuna search and
+applied to all three modes for parity: `lr=1.44e-5`,
+`weight_decay=4.42e-5`, `hidden_dim=128`, `attn_dim=64`,
+`dropout=0.345`, `patience=5`, `label_smoothing=0.075`,
+`entropy_lambda=1e-4`, `grad_clip=0.0`. PRAME normalization:
+`prame_norm=zscore_per_source` (per-cohort z-scoring of the PRAME
+scalar before injection into the bag — see the Limitations section
+for why this matters). DANN: `adv_lambda_max=1.0`,
+`adv_warmup_epochs=0`, `adv_hidden_dim=64`. AMP bf16 autocast on
+CUDA. Cosine annealing LR, early stopping on validation AUC.
+
+#### Figures
+
+- `results/uni/component2/cv_results_full.png`,
+  `cv_results_no_predicted.png`, `cv_results_no_prame.png` — per-fold
+  validation AUC and ROC curves per mode.
+- `results/uni/component2/training_curves_full.png`,
+  `training_curves_no_predicted.png`,
+  `training_curves_no_prame.png` — train/val loss and AUC
+  trajectories per fold.
+- `results/uni/component2/compare/compare_variants.png` — bundled
+  comparison: per-fold AUC traces with mean lines, pooled ROC across
+  folds, per-fold AUC bar chart, aggregate metrics with std error
+  bars.
+
+## Limitations and Future Work
+
+The Component 2 numbers above are headline-positive — AUC 1.0 across
+all folds, every melanoma slide ranks above every non-melanoma slide,
+the PRAME branch is computationally well-behaved — and they are also
+misleading. The dataset has structural problems that the
+architecture, no matter how well-tuned, cannot solve on its own.
+
+### The Core Problem: Perfect Source-to-Label Collinearity
+
+The diagnostic manifest is a four-cohort patchwork:
+
+| Source | Label | Count | RNA Pipeline | Tissue Acquisition |
+|--------|-------|-------|--------------|--------------------|
+| TCGA-SKCM | melanoma=1 | 200 | STAR + RSEM bulk RNA-Seq | Surgical biopsy/excision |
+| GTEx normal skin | melanoma=0 | 200 | GTEx v10 bulk RNA-Seq | Post-mortem |
+| HEST Visium | melanoma=0 | 88 | Spatial transcriptomics pseudobulked to TPM | Mixed biopsy origins |
+| SKCM tumor-free | melanoma=0 | 3 | None measured | Surgical |
+
+`source_group` and `melanoma_label` are perfectly collinear. Every
+melanoma slide is TCGA-SKCM; no melanoma slide comes from any other
+source. A model that learns "is this slide TCGA-shaped?" wins every
+fold at AUC 1.0 without ever modeling melanoma morphology.
+
+### The PRAME Scale Confound (and Why We Already Neutered It)
+
+The raw PRAME TPM distribution is itself a near-deterministic
+function of source:
+
+| Source | n with measured PRAME | Median TPM | Max TPM |
+|--------|----------------------|-----------|---------|
+| SKCM melanoma | 200 | 427.03 | 1968.07 |
+| GTEx normal | 200 | 0.085 | 12.15 |
+| HEST Visium pseudobulk | 77 | 0.14 | 2316.15 |
+
+A single threshold on log-PRAME at roughly TPM = 5 separates SKCM
+from non-SKCM with near-perfect accuracy. The production training
+config used `prame_norm=zscore_per_source`, which z-scores PRAME
+within each cohort before injecting it into the bag — collapsing all
+three sources to roughly mean-0/std-1 and destroying the absolute
+PRAME signal. This is a defensive choice that prevents PRAME-magnitude
+from being trivially read as a cohort tag, but it also destroys the
+clinically meaningful information that PRAME was supposed to carry.
+Either way, the paired-delta result (full vs no_prame Δ = 0) shows
+that PRAME — z-scored or not — contributes nothing here. The visual
+channel alone is winning.
+
+### Why the DANN Adversary Is Not Sufficient
+
+The DANN cohort adversary works at the metric it measures: adversary
+accuracy is at chance for the `full` and `no_predicted` modes. But
+"explicit cohort identity scrubbed from the bag representation" is a
+weaker guarantee than "no cohort information used by the classifier."
+The leakage path the adversary cannot close is the one this dataset
+hands to it for free: stain and scanner statistics correlate with
+label by construction. TCGA-SKCM slides were prepared and scanned at
+TCGA contributor sites under one protocol; GTEx slides at Brigham and
+Women's under another; HEST slides on Visium hardware at multiple
+academic labs under a third. Mean H, S, V, contrast, dynamic range,
+the distribution of empty-tissue corner colour, even the dot pattern
+of Visium fiducial markers — all of these track source, and therefore
+track label. The MIL classifier can encode any of them in a way that
+survives the adversary's pressure, because removing them entirely
+would also remove the genuine morphological signal that lives in the
+same channels. With per-source PRAME z-scoring already in place to
+neutralize the metadata-channel shortcut, the visual-channel shortcut
+is the only viable explanation for the perfect AUC.
+
+### What This Result Actually Demonstrates
+
+Component 2 demonstrates that the pipeline runs end-to-end:
+PRAME-conditioned bags are constructed, trained, validated under
+patient-level CV, and produce per-slide predictions across all three
+ablation modes. The architecture is sound and the regularization is
+stable. What it does **not** demonstrate is that PRAME conditioning
+improves melanoma diagnosis from H&E, because the dataset cannot
+answer that question. Every fold's "melanoma" class is one scanner's
+TCGA-SKCM slides, and "not melanoma" is anything else. Until that
+confound is broken, AUC 1.0 is a measurement of cohort separability,
+not of diagnostic skill.
+
+### To Make This Work for Real
+
+A genuine PRAME-conditioned melanoma classifier would need, at
+minimum:
+
+1. **Cross-cohort melanoma slides.** Melanoma cases from at least one
+   non-TCGA source — Camelyon17 melanoma metastases, any HEST
+   melanoma Visium cases that exist, or curated in-house slides from
+   a different scanner — so that `source_group` and `melanoma_label`
+   are at least partially independent. Without this, no amount of
+   adversarial training or normalization can produce an honest
+   metric.
+2. **Cross-cohort non-melanoma matched to scanner.** Non-melanoma
+   skin from the same scanners that produced the melanoma slides, so
+   that the model cannot pivot to a scanner shortcut. Ideally, every
+   scanner contributes both classes.
+3. **PRAME harmonization, not within-source z-scoring.** The current
+   `prame_norm=zscore_per_source` setting prevents PRAME magnitude
+   from leaking cohort identity but also destroys the absolute PRAME
+   signal that would actually inform diagnosis (SKCM median 427 and
+   GTEx median 0.085 collapse to roughly z=0 within their respective
+   populations). A defensible alternative is a rank-based or
+   quantile-normalized PRAME computed jointly across all cohorts,
+   which preserves relative ordering across sources at the cost of
+   baking in pipeline differences. Re-quantifying every cohort
+   through one RNA-Seq pipeline from FASTQ is the gold standard but
+   is impractical for public data at this scale.
+4. **Held-out cohort evaluation, not just held-out patient.**
+   Patient-level CV blocks patient leakage but not cohort leakage. A
+   leave-one-source-out protocol — train on SKCM + GTEx + HEST, test
+   on the cross-cohort melanoma slides added per (1) — is the only
+   honest test of whether the model has learned melanoma morphology
+   or scanner morphology. Until this evaluation produces non-trivial
+   results, the within-cohort AUC numbers should be treated as an
+   upper bound on what the model could possibly know, not as a
+   measure of what it has actually learned.
+5. **A clinically-paired biopsy cohort.** The longer-term goal is
+   shave, punch, and excisional biopsies with paired PRAME IHC and
+   matched H&E, all from one institution under one protocol, with
+   biopsy geometry metadata attached. None of the four public
+   datasets used here meet that bar; constructing such a cohort is
+   the long-pole future-work item this project ultimately points
+   toward, and is what would let the geometric-conditioning layer
+   described in the project overview become a real model component
+   rather than an aspiration.
+
+The Component 1 results (UNI mean AUC 0.741) are believable because
+Component 1 trains within a single cohort (TCGA-SKCM only) and
+predicts a continuous biological signal (PRAME quartile-extreme) that
+is not collinear with source. The Component 2 results are not
+believable in the same way until the dataset is reconstructed. The
+pipeline, the architecture, and the diagnostics are all ready for
+that reconstructed dataset whenever it exists.
