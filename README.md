@@ -663,7 +663,7 @@ melanoma slide is TCGA-SKCM; no melanoma slide comes from any other
 source. A model that learns "is this slide TCGA-shaped?" wins every
 fold at AUC 1.0 without ever modeling melanoma morphology.
 
-### The PRAME Scale Confound (and Why We Already Neutered It)
+### The PRAME Scale Confound
 
 The raw PRAME TPM distribution is itself a near-deterministic
 function of source:
